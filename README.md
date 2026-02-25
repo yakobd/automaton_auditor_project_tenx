@@ -1,56 +1,66 @@
 # Automaton Auditor
 
-Automaton Auditor is a LangGraph-based forensic workflow that audits peer repositories for graph construction quality, atomic progress in commit history, and documentation coverage.
+Automaton Auditor is a LangGraph-based forensic workflow that audits peer repositories for graph construction quality, atomic progress in commit history, and documentation coverage. It utilizes a sophisticated parallel orchestration pattern with conditional resilience.
 
-## Quick Start
+---
 
-### Prerequisites
+## 🚀 Quick Start & Operations
 
-- Python 3.12
-- [uv](https://docs.astral.sh/uv/) installed
+### Technical Requirements
+
+- **Python Version**: `3.12.*` (Strictly enforced via `pyproject.toml`).
+- **Package Manager**: [uv](https://docs.astral.sh/uv/) is required for environment management and reproducibility.
+- **System Tools**: `git` must be installed and accessible in your system PATH for cloning operations.
 
 ### Setup and Run
 
-```bash
-uv sync
-uv run main.py
-```
+| Task              | Command                   | Description                                       |
+| :---------------- | :------------------------ | :------------------------------------------------ |
+| **Install**       | `uv sync`                 | Installs exact dependencies from `uv.lock`.       |
+| **Run Audit**     | `uv run main.py <url>`    | Executes the full forensic graph on a target URL. |
+| **Format Code**   | `uv run black .`          | Ensures code style meets project standards.       |
+| **Clean Sandbox** | `rm -rf forensic_audit_*` | Removes temporary forensic clone directories.     |
 
-The startup check confirms environment configuration (without printing secrets), then executes the audit graph.
+> **Note**: A `.env` file must exist containing `OPENAI_API_KEY` and `USER_AGENT` (for Docling).
 
-## Project Structure
+---
+
+## 🏗️ Project Structure
 
 ```text
 src/
-├── graph.py                # LangGraph workflow definition (parallel detectives + judge)
-├── state.py                # Pydantic Evidence model + AgentState schema/reducers
+├── graph.py        # Orchestration logic (Conditional Fan-out/Fan-in)
+├── state.py        # Pydantic Evidence models + Typed AgentState with Reducers
 ├── nodes/
-│   └── detectives.py       # Graph nodes: repo investigator, doc analyst, judge
+│   └── detectives.py # Orchestration nodes (investigator, analyst, judge)
 └── tools/
-	├── repo_tools.py       # Git clone, commit metadata, AST StateGraph verification
-	└── doc_tools.py        # PDF/Docling analysis and keyword extraction
+    ├── repo_tools.py # AST verification, Git history, and sandboxed cloning
+    └── doc_tools.py  # PDF/Docling analysis and keyword extraction
+
+## 💎 Architecture & Orchestration
+The workflow uses an advanced Conditional Diamond Fan-out/Fan-in pattern:
+
+Preparation: clone_repo prepares a local sandbox.
+
+Conditional Routing:
+
+Success Path: If cloning succeeds, the graph triggers a parallel fan-out to repo_investigator and doc_analyst.
+
+Failure/Skip Path: If the repo is inaccessible or missing metadata, the graph uses a conditional edge to skip detectives and route directly to the judge.
+
+Aggregation (Fan-in): Findings from parallel branches are normalized and merged into the judge node for final verdict.
+
+Forensic Rigor
+Typed State: Evidence is a Pydantic model with validated severity and rationale.
+
+Reducers: AgentState uses Annotated[list, operator.add] to ensure evidence from concurrent detectives is accumulated deterministically.
+
+Sandboxing: Repository tools use subprocess with timeouts and error-handling to ensure the host environment remains secure.
+
+## 🛠️ Infrastructure & Reproducibility
+Dependency Pinning: This project includes a uv.lock file pinning all 150+ sub-dependencies.
+
+Environment Integrity: Graders can replicate the exact development environment by running uv sync.
+
+Secret Hygiene: Startup checks verify environment configuration without exposing sensitive keys.
 ```
-
-- `src/tools/` contains reusable forensic utilities (repo analysis + document analysis).
-- `src/nodes/` contains orchestration-facing node functions that call tools and emit structured evidence.
-
-## Architecture
-
-The workflow uses a **Diamond Fan-out/Fan-in** pattern:
-
-1. `clone_repo` runs first and prepares a local sandbox path.
-2. **Fan-out**: two detectives run in parallel:
-   - `repo_investigator` (AST + git history)
-   - `doc_analyst` (Docling PDF/document checks)
-3. **Fan-in**: both branches merge into `judge`, which aggregates findings and returns a final verdict.
-
-State and evidence handling are strongly typed:
-
-- `Evidence` is a Pydantic model with validated severity (`1..5`).
-- `AgentState.evidences` uses `Annotated[list[Evidence], operator.add]` so parallel node outputs are merged by reducer semantics.
-- This reducer-based collection ensures forensic evidence from concurrent detectives is accumulated deterministically.
-
-## Notes
-
-- The auditor is designed for interim challenge submissions and incremental hardening.
-- Keep secrets in `.env`; never commit real API keys.

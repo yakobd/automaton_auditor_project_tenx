@@ -27,9 +27,13 @@ def main() -> None:
 	python_files = list(repo_root.rglob("*.py"))
 
 	langgraph_matches: list[str] = []
+	forensic_errors: list[str] = []
 	for python_file in python_files:
-		if verify_langgraph_usage(str(python_file)):
+		is_found, message = verify_langgraph_usage(str(python_file))
+		if is_found:
 			langgraph_matches.append(str(python_file))
+		elif message.startswith("Forensic Error"):
+			forensic_errors.append(message)
 
 	print("\nAST verification results")
 	print(f"Python files scanned: {len(python_files)}")
@@ -42,6 +46,11 @@ def main() -> None:
 	if len(langgraph_matches) > preview_limit:
 		remaining = len(langgraph_matches) - preview_limit
 		print(f"... and {remaining} more")
+
+	if forensic_errors:
+		print(f"Forensic parser errors: {len(forensic_errors)}")
+		for error in forensic_errors[:3]:
+			print(f"- {error}")
 
 	metadata = get_commit_metadata(cloned_repo_path)
 	print("\nCommit metadata (Atomic Progress)")

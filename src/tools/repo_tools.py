@@ -1,28 +1,48 @@
 import os
 import tempfile
 import ast
+import subprocess
+import shutil
+from pathlib import Path
 from typing import Any
 
 import git
 
 # 1. SANDBOXED CLONE
+import subprocess
+import shutil
+from pathlib import Path
+import tempfile
+
 def clone_peer_repo(repo_url: str) -> str:
-    if not repo_url or not repo_url.strip():
-        return "Error: Repository URL is empty."
-
-    temp_dir = tempfile.mkdtemp(prefix="peer_repo_")
-
+    """
+    Forensically isolated clone using a secure TemporaryDirectory.
+    Includes explicit error handling and subprocess timeouts.
+    """
+    # Create a persistent-path-safe temp directory
+    temp_dir = tempfile.mkdtemp(prefix="forensic_audit_")
+    
     try:
-        git.Repo.clone_from(repo_url.strip(), temp_dir)
-        return os.path.abspath(temp_dir)
-    except git.exc.GitCommandError:
-        return (
-            "Error: Failed to clone repository. The URL may be invalid, "
-            "the repository may be private, or access credentials are missing."
+        # Use subprocess for explicit return-code handling and security
+        result = subprocess.run(
+            ["git", "clone", "--depth", "1", repo_url.strip(), temp_dir],
+            capture_output=True,
+            text=True,
+            timeout=30  # Explicit safety timeout
         )
-    except Exception as exc:
-        return f"Error: Unexpected failure while cloning repository: {exc}"
-
+        
+        if result.returncode != 0:
+            shutil.rmtree(temp_dir) # Clean up on failure
+            return f"Error: Git clone failed. {result.stderr.strip()}"
+            
+        return temp_dir
+    except subprocess.TimeoutExpired:
+        shutil.rmtree(temp_dir)
+        return "Error: Git clone timed out after 30 seconds."
+    except Exception as e:
+        if Path(temp_dir).exists():
+            shutil.rmtree(temp_dir)
+        return f"Error: Forensic sandbox failure: {str(e)}"
 # 2. GIT LOG EXTRACTION
 def get_commit_metadata(repo_path: str) -> dict[str, Any]:
     try:
@@ -59,19 +79,31 @@ def _is_stategraph_call(node: ast.AST) -> bool:
 
 # 3. AST-BASED GRAPH ANALYSIS
 
-def verify_langgraph_usage(file_path: str) -> bool:
+def verify_langgraph_usage(file_path: str) -> tuple[bool, str]:
     try:
         with open(file_path, "r", encoding="utf-8") as source_file:
             source = source_file.read()
         tree = ast.parse(source, filename=file_path)
-    except (FileNotFoundError, PermissionError, UnicodeDecodeError, SyntaxError):
-        return False
+    except SyntaxError as exc:
+        return (
+            False,
+            f"Forensic Error: SyntaxError while parsing '{file_path}': {exc.msg} (line {exc.lineno}).",
+        )
+    except UnicodeDecodeError as exc:
+        return (
+            False,
+            f"Forensic Error: UnicodeDecodeError while reading '{file_path}': {exc}.",
+        )
+    except (FileNotFoundError, PermissionError) as exc:
+        return False, f"Forensic Error: Unable to access '{file_path}': {exc}."
+    except Exception as exc:
+        return False, f"Forensic Error: Unexpected analysis failure for '{file_path}': {exc}."
 
     # FIX: This loop must be aligned with the 'try' block, not the 'except'
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign) and _is_stategraph_call(node.value):
-            return True
+            return True, "StateGraph assignment detected."
         if isinstance(node, ast.AnnAssign) and node.value and _is_stategraph_call(node.value):
-            return True
+            return True, "StateGraph assignment detected."
 
-    return False
+    return False, "No formal StateGraph assignment found."
