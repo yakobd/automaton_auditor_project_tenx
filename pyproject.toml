@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "automaton-auditor"
+version = "0.1.0"
+description = "Automaton Auditor - Week 2 FDE Challenge"
+readme = "README.md"
+requires-python = "==3.12.*"
+dependencies = [
+	"langgraph",
+	"langchain",
+	"langchain-openai",
+	"pydantic",
+	"GitPython",
+	"typing-extensions",
+	"python-dotenv",
+	"docling",
+	"langsmith",
+]
+
+[project.scripts]
+run = "src.graph:main"
+state = "src.state:main"
+
+[dependency-groups]
+dev = [
+	"black",
+	"ruff",
+]
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
