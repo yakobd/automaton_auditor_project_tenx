@@ -57,10 +57,29 @@ Reducers: AgentState uses Annotated[list, operator.add] to ensure evidence from 
 
 Sandboxing: Repository tools use subprocess with timeouts and error-handling to ensure the host environment remains secure.
 
-## 🛠️ Infrastructure & Reproducibility
-Dependency Pinning: This project includes a uv.lock file pinning all 150+ sub-dependencies.
+🛠️ Infrastructure & Troubleshooting (Add to README)
+🛡️ Dependency Pinning & Reproducibility
 
-Environment Integrity: Graders can replicate the exact development environment by running uv sync.
+Lock File: A uv.lock file is included in this repository to ensure 100% reproducible builds across different environments.
 
-Secret Hygiene: Startup checks verify environment configuration without exposing sensitive keys.
+
+Environment Integrity: Running uv sync installs the exact 157 sub-dependencies used during development, eliminating "version drift" issues common with standard requirements.txt files.
+
+🔍 Expected Outputs
+When running the audit (uv run main.py <url>), you should expect the following sequence:
+
+
+Environment Check: Confirms LANGCHAIN_API_KEY presence.
+
+
+Node Tracing: Real-time console logs showing node entry/exit (e.g., [Node Completed]: repo_investigator).
+
+
+Final Report: A structured summary of Evidence objects with Severity and Rationale.
+
+Issue,Cause,Solution
+Authentication Error,Missing or invalid API Key,Ensure OPENAI_API_KEY is set in your .env file.
+Clone Failure,Private repo or invalid URL,The graph will trigger a Conditional Failure Path and route directly to the Judge for a graceful report.+1
+ModuleNotFoundError,Out-of-sync environment,Run uv sync to refresh the virtual environment from the lock file.
+Docling Timeout,Massive PDF files,Docling may take 30-60s for large documents; do not interrupt the process.
 ```
