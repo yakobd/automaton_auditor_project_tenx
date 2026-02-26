@@ -36,6 +36,8 @@ class AgentState(TypedDict):
     evidences: Annotated[List[Evidence], operator.add]
     metadata: Annotated[Dict[str, Any], operator.ior]
     opinion: Optional[JudicialOpinion]
+    prosecutor_critique: str
+    defense_counsel: str
     repo_url: str
     repo_path: Optional[str]
     audit_completed: bool

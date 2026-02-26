@@ -9,15 +9,17 @@ description = "Automaton Auditor - Week 2 FDE Challenge"
 readme = "README.md"
 requires-python = "==3.12.*"
 dependencies = [
-	"langgraph",
-	"langchain",
-	"langchain-openai",
-	"pydantic",
-	"GitPython",
-	"typing-extensions",
-	"python-dotenv",
-	"docling",
-	"langsmith",
+	"langgraph==1.0.9",
+	"langchain==1.2.10",
+	"langchain-openai==1.1.10",
+	"pydantic==2.12.5",
+	"GitPython==3.1.46",
+	"typing-extensions==4.15.0",
+	"python-dotenv==1.2.1",
+	"docling==2.75.0",
+	"langsmith==0.7.6",
+	"langchain-google-genai>=4.2.1",
+	"langchain-groq>=1.1.2",
 ]
 
 [project.scripts]
