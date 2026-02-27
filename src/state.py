@@ -1,43 +1,100 @@
-# metadata: Annotated[Dict[str, Any], operator.ior]
-    # Note: Uses operator.ior for merging dictionary updates from parallel nodes. 
-    # In case of key collisions, the last node to complete will overwrite the key.
+# # metadata: Annotated[Dict[str, Any], operator.ior]
+#     # Note: Uses operator.ior for merging dictionary updates from parallel nodes. 
+#     # In case of key collisions, the last node to complete will overwrite the key.
+
+# import operator
+# from typing import Annotated, TypedDict, List, Optional, Dict, Any
+# from pydantic import BaseModel, Field
+
+# class Evidence(BaseModel):
+#     title: str
+#     severity: int = Field(ge=1, le=5)
+#     summary: str
+#     source: str
+#     # NEW FIELDS FOR TOP MARKS
+#     rationale: str = Field(default="No rationale provided", description="Detailed reasoning for this finding")
+#     confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Confidence in this finding (0 to 1)")
+
+# class JudicialOpinion(BaseModel):
+#     """The final structured verdict from the Judge node."""
+#     score: int = Field(ge=0, le=100)
+#     verdict: str = Field(..., pattern="^(PASS|FAIL)$")
+#     recommendation: str
+#     # Adding a reasoning field provides the 'fuller documentation' the rubric asked for
+#     reasoning: str 
+
+# class AgentState(TypedDict):
+#     """
+#     Global state for the Automaton Auditor.
+    
+#     Attributes:
+#         evidences: Accumulated list of findings. Uses operator.add to support 
+#                   parallel writes from multiple detective nodes.
+#         metadata: Shared dictionary for aggregate metrics. Uses operator.ior 
+#                   to allow parallel updates (merging) of keys.
+#         prosecutor_critique: Aggregated prosecutor outputs. Uses operator.add 
+#                   so parallel prosecutor-style nodes append rather than overwrite.
+#         defense_counsel: Aggregated defense outputs. Uses operator.add so 
+#                   parallel defense nodes append rather than overwrite.
+#         tech_lead_assessment: Aggregated tech lead assessments. Uses 
+#                   operator.add so multiple assessors can contribute.
+#     """
+#     evidences: Annotated[List[Evidence], operator.add]
+#     metadata: Annotated[Dict[str, Any], operator.ior]
+#     opinion: Optional[JudicialOpinion]
+#     prosecutor_critique: Annotated[str, operator.add]
+#     defense_counsel: Annotated[str, operator.add]
+#     tech_lead_assessment: Annotated[str, operator.add]
+#     repo_url: str
+#     repo_path: Optional[str]
+#     audit_completed: bool
 
 import operator
-from typing import Annotated, TypedDict, List, Optional, Dict, Any
+from typing import Annotated, TypedDict, List, Optional, Dict, Literal
 from pydantic import BaseModel, Field
 
+# --- Detective Output [cite: 129-139] ---
 class Evidence(BaseModel):
-    title: str
-    severity: int = Field(ge=1, le=5)
-    summary: str
-    source: str
-    # NEW FIELDS FOR TOP MARKS
-    rationale: str = Field(default="No rationale provided", description="Detailed reasoning for this finding")
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Confidence in this finding (0 to 1)")
+    goal: str = Field(description="The specific forensic goal being investigated")
+    found: bool = Field(description="Whether the artifact exists")
+    content: Optional[str] = Field(default=None, description="Snippet of code or text found")
+    location: str = Field(description="File path or commit hash")
+    rationale: str = Field(description="Rationale for confidence in this evidence")
+    confidence: float = Field(ge=0.0, le=1.0)
 
+# --- Judge Output  ---
 class JudicialOpinion(BaseModel):
-    """The final structured verdict from the Judge node."""
-    score: int = Field(ge=0, le=100)
-    verdict: str = Field(..., pattern="^(PASS|FAIL)$")
-    recommendation: str
-    # Adding a reasoning field provides the 'fuller documentation' the rubric asked for
-    reasoning: str 
+    judge: Literal["Prosecutor", "Defense", "TechLead"]
+    criterion_id: str
+    score: int = Field(ge=1, le=5)
+    argument: str
+    cited_evidence: List[str]
 
+# --- Chief Justice Output  ---
+class CriterionResult(BaseModel):
+    dimension_id: str
+    dimension_name: str
+    final_score: int = Field(ge=1, le=5)
+    judge_opinions: List[JudicialOpinion]
+    dissent_summary: Optional[str] = None
+    remediation: str
+
+class AuditReport(BaseModel):
+    repo_url: str
+    executive_summary: str
+    overall_score: float
+    criteria: List[CriterionResult]
+    remediation_plan: str
+
+# --- Graph State [cite: 168-180] ---
 class AgentState(TypedDict):
-    """
-    Global state for the Automaton Auditor.
-    
-    Attributes:
-        evidences: Accumulated list of findings. Uses operator.add to support 
-                  parallel writes from multiple detective nodes.
-        metadata: Shared dictionary for aggregate metrics. Uses operator.ior 
-                  to allow parallel updates (merging) of keys.
-    """
-    evidences: Annotated[List[Evidence], operator.add]
-    metadata: Annotated[Dict[str, Any], operator.ior]
-    opinion: Optional[JudicialOpinion]
-    prosecutor_critique: str
-    defense_counsel: str
     repo_url: str
     repo_path: Optional[str]
+    pdf_path: Optional[str]
+    rubric_dimensions: List[Dict]
+    synthesis_rules: Dict[str, str]
+    # Reducers prevent data overwriting during parallel execution
+    evidences: Annotated[Dict[str, List[Evidence]], operator.ior]
+    opinions: Annotated[List[JudicialOpinion], operator.add]
+    final_report: Optional[AuditReport]
     audit_completed: bool

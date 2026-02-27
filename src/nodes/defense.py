@@ -3,47 +3,80 @@ import time
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
-from pydantic import BaseModel, Field
 
-from src.state import AgentState
-
-
-class JudicialOpinion(BaseModel):
-    score: int = Field(ge=1, le=5)
-    argument: str = Field(min_length=1)
-    cited_evidence: list[str] = Field(default_factory=list)
+from src.state import AgentState, JudicialOpinion
 
 
 def _format_evidence_block(state: AgentState) -> str:
-    evidences = state.get("evidences", [])
-    if not evidences:
+    evidence_map = state.get("evidences", {})
+    if not evidence_map:
         return "No evidences were collected. Frame this as a process gap that can still be fixed quickly."
 
     lines: list[str] = []
-    for idx, evidence in enumerate(evidences, start=1):
-        title = getattr(evidence, "title", "Untitled")
-        severity = getattr(evidence, "severity", "N/A")
-        source = getattr(evidence, "source", "Unknown")
-        summary = getattr(evidence, "summary", "")
-        rationale = getattr(evidence, "rationale", "")
-        confidence = getattr(evidence, "confidence", "N/A")
-        lines.append(
-            f"{idx}. Title: {title}\n"
-            f"   Severity: {severity}\n"
-            f"   Source: {source}\n"
-            f"   Summary: {summary}\n"
-            f"   Rationale: {rationale}\n"
-            f"   Confidence: {confidence}"
-        )
+    item_index = 1
+    for dimension, evidences in evidence_map.items():
+        for evidence in evidences:
+            goal = getattr(evidence, "goal", "Unknown goal")
+            found = getattr(evidence, "found", False)
+            content = getattr(evidence, "content", "")
+            location = getattr(evidence, "location", "Unknown")
+            rationale = getattr(evidence, "rationale", "")
+            confidence = getattr(evidence, "confidence", "N/A")
+            lines.append(
+                f"{item_index}. Dimension: {dimension}\n"
+                f"   Goal: {goal}\n"
+                f"   Found: {found}\n"
+                f"   Location: {location}\n"
+                f"   Content: {content or 'N/A'}\n"
+                f"   Rationale: {rationale}\n"
+                f"   Confidence: {confidence}"
+            )
+            item_index += 1
+
+    if not lines:
+        return "No evidences were collected. Frame this as a process gap that can still be fixed quickly."
 
     return "\n".join(lines)
 
 
-def _invoke_structured_opinion(system_prompt: str, user_prompt: str, temperature: float, max_retries: int = 3) -> JudicialOpinion | None:
+def _resolve_criterion_ids(state: AgentState) -> list[str]:
+    ids: list[str] = []
+    for dimension in state.get("rubric_dimensions", []):
+        if not isinstance(dimension, dict):
+            continue
+        criterion_id = str(dimension.get("id") or dimension.get("dimension_id") or "").strip()
+        if criterion_id and criterion_id not in ids:
+            ids.append(criterion_id)
+    return ids or ["general"]
+
+
+def _build_binding_law(state: AgentState, criterion_id: str) -> str:
+    dimension_payload: dict = {}
+    for dimension in state.get("rubric_dimensions", []):
+        if isinstance(dimension, dict) and str(dimension.get("id") or "") == criterion_id:
+            dimension_payload = dimension
+            break
+
+    judicial_logic = str(dimension_payload.get("judicial_logic") or "").strip()
+    success_pattern = str(dimension_payload.get("success_pattern") or "").strip()
+    failure_pattern = str(dimension_payload.get("failure_pattern") or "").strip()
+
+    synthesis_rules = state.get("synthesis_rules", {})
+    synthesis_text = "\n".join(f"- {key}: {value}" for key, value in synthesis_rules.items())
+
+    return (
+        f"Judicial Logic: {judicial_logic or 'Use synthesis_rules as binding law when judicial_logic is absent.'}\n"
+        f"Success Pattern: {success_pattern or 'Not specified'}\n"
+        f"Failure Pattern: {failure_pattern or 'Not specified'}\n"
+        f"Synthesis Rules (Binding Law):\n{synthesis_text or '- No synthesis rules provided.'}"
+    )
+
+
+def _invoke_structured_opinion(system_prompt: str, user_prompt: str, criterion_id: str, temperature: float, max_retries: int = 3) -> JudicialOpinion | None:
     model = ChatGroq(
         model="llama-3.3-70b-versatile",
         temperature=temperature,
-        groq_api_key=os.getenv('GROQ_API_KEY'),
+        groq_api_key=os.getenv("GROQ_API_KEY"),
     ).with_structured_output(JudicialOpinion)
 
     for _ in range(max_retries):
@@ -56,51 +89,48 @@ def _invoke_structured_opinion(system_prompt: str, user_prompt: str, temperature
                 ]
             )
             if isinstance(result, JudicialOpinion) and result.argument.strip() and result.cited_evidence:
-                return result
+                return result.model_copy(update={"judge": "Defense", "criterion_id": criterion_id})
         except Exception:
             continue
 
     return None
 
 
-def _format_structured_output(opinion: JudicialOpinion) -> str:
-    cited_lines = "\n".join(f"- {item}" for item in opinion.cited_evidence)
-    return (
-        f"Score (1-5): {opinion.score}\n"
-        f"Argument: {opinion.argument}\n"
-        f"Cited Evidence:\n{cited_lines}"
-    )
-
-
 def defense_node(state: AgentState):
-    """Generate an optimistic defense statement from collected evidences."""
+    """Generate defense structured opinions for every rubric criterion."""
     evidence_block = _format_evidence_block(state)
     repo_url = state.get("repo_url", "Unknown repository")
+    criterion_ids = _resolve_criterion_ids(state)
 
-    system_prompt = (
-        "You are a Supportive Senior Architect acting as defense counsel. "
-        "Return ONLY a structured JudicialOpinion object with fields: "
-        "score (1-5), argument (string), and cited_evidence (list of strings). "
-        "Highlight strengths and practical viability, but stay grounded in evidence."
-    )
+    opinions: list[JudicialOpinion] = []
+    for criterion_id in criterion_ids:
+        binding_law = _build_binding_law(state, criterion_id)
 
-    user_prompt = (
-        f"Repository under audit: {repo_url}\n\n"
-        "Collected evidence:\n"
-        f"{evidence_block}\n\n"
-        "Produce a defense argument that emphasizes pragmatic strengths and realistic mitigation paths."
-    )
-
-    opinion = _invoke_structured_opinion(system_prompt, user_prompt, temperature=0.4)
-    if opinion is None:
-        opinion = JudicialOpinion(
-            score=3,
-            argument="Structured defense output unavailable after retries; strengths cannot be fully established.",
-            cited_evidence=["LLM failed to return valid structured output after retries."],
+        system_prompt = (
+            "You are a supportive senior architect acting as defense counsel. "
+            "Return ONLY a structured JudicialOpinion object with fields: "
+            "judge, criterion_id, score (1-5), argument (string), and cited_evidence (list of strings). "
+            "Set judge exactly to 'Defense'. Highlight strengths and practical viability, but stay grounded in evidence.\n\n"
+            f"BINDING LAW:\n{binding_law}"
         )
 
-    defense_text = _format_structured_output(opinion)
-    return {
-        "defense_counsel": defense_text,
-        "metadata": {"defense_structured": opinion.model_dump()},
-    }
+        user_prompt = (
+            f"Repository under audit: {repo_url}\n"
+            f"Criterion ID: {criterion_id}\n\n"
+            "Collected evidence:\n"
+            f"{evidence_block}\n\n"
+            "Produce a defense argument that emphasizes pragmatic strengths and realistic mitigation paths."
+        )
+
+        opinion = _invoke_structured_opinion(system_prompt, user_prompt, criterion_id=criterion_id, temperature=0.4)
+        if opinion is None:
+            opinion = JudicialOpinion(
+                judge="Defense",
+                criterion_id=criterion_id,
+                score=3,
+                argument="Structured defense output unavailable after retries; strengths cannot be fully established.",
+                cited_evidence=["LLM failed to return valid structured output after retries."],
+            )
+        opinions.append(opinion)
+
+    return {"opinions": opinions}

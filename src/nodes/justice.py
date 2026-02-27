@@ -1,192 +1,218 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
-
-from src.state import AgentState, JudicialOpinion
+from src.state import AgentState, AuditReport, CriterionResult, JudicialOpinion
 
 
-def _coerce_score(value: Any, default: int = 3) -> int:
-    try:
-        parsed = int(value)
-    except Exception:
-        return default
-    return max(1, min(5, parsed))
+def _get_dimension_id(raw_dimension: dict) -> str:
+    return str(
+        raw_dimension.get("id")
+        or raw_dimension.get("dimension_id")
+        or raw_dimension.get("criterion_id")
+        or "general"
+    )
 
 
-def _coerce_cited_evidence(value: Any) -> list[str]:
-    if isinstance(value, list):
-        return [str(item) for item in value if str(item).strip()]
-    return []
+def _get_dimension_name(raw_dimension: dict, fallback_id: str) -> str:
+    return str(
+        raw_dimension.get("name")
+        or raw_dimension.get("dimension_name")
+        or raw_dimension.get("title")
+        or fallback_id
+    )
 
 
-def _extract_structured(metadata: dict[str, Any], key: str) -> dict[str, Any]:
-    payload = metadata.get(key, {})
-    if not isinstance(payload, dict):
-        payload = {}
-    return {
-        "score": _coerce_score(payload.get("score"), 3),
-        "argument": str(payload.get("argument") or "No argument provided."),
-        "cited_evidence": _coerce_cited_evidence(payload.get("cited_evidence")),
-    }
+def _group_opinions_by_dimension(opinions: list[JudicialOpinion]) -> dict[str, list[JudicialOpinion]]:
+    grouped: dict[str, list[JudicialOpinion]] = {}
+    for opinion in opinions:
+        grouped.setdefault(opinion.criterion_id, []).append(opinion)
+    return grouped
 
 
-def _prosecutor_flags_security(prosecutor: dict[str, Any], state: AgentState) -> bool:
-    keywords = [
+def _find_judge_opinion(opinions: list[JudicialOpinion], judge: str) -> JudicialOpinion | None:
+    for opinion in opinions:
+        if opinion.judge == judge:
+            return opinion
+    return None
+
+
+def _contains_security_signal(text: str) -> bool:
+    keywords = (
         "security",
-        "secret",
-        "credential",
         "vulnerab",
-        "auth",
+        "credential",
         "token",
-        ".env",
-        "id_rsa",
-    ]
+        "secret",
+        "auth",
+        "exposed",
+        "leak",
+        "injection",
+        "xss",
+        "sql",
+        "rce",
+        "cve",
+    )
+    lowered = text.lower()
+    return any(keyword in lowered for keyword in keywords)
 
-    prosecutor_text = (
-        prosecutor.get("argument", "") + " " + " ".join(prosecutor.get("cited_evidence", []))
-    ).lower()
-    if any(keyword in prosecutor_text for keyword in keywords):
+
+def _security_cap_triggered(state: AgentState, dimension_id: str, prosecutor: JudicialOpinion) -> bool:
+    prosecutor_text = (prosecutor.argument + " " + " ".join(prosecutor.cited_evidence)).strip()
+    has_security_context = _contains_security_signal(prosecutor_text)
+    has_confirmation = any(word in prosecutor_text.lower() for word in ("confirm", "confirmed", "found", "verified", "present"))
+
+    if has_security_context and (has_confirmation or prosecutor.score <= 2):
         return True
 
-    evidences = state.get("evidences", [])
-    for evidence in evidences:
-        title = str(getattr(evidence, "title", "")).lower()
-        summary = str(getattr(evidence, "summary", "")).lower()
-        if "secret exposure" in title or any(keyword in summary for keyword in keywords):
+    evidence_map = state.get("evidences", {})
+    for evidence in evidence_map.get(dimension_id, []):
+        goal = str(getattr(evidence, "goal", ""))
+        content = str(getattr(evidence, "content", "") or "")
+        rationale = str(getattr(evidence, "rationale", ""))
+        found = bool(getattr(evidence, "found", False))
+        if found and _contains_security_signal(f"{goal} {content} {rationale}") and has_security_context:
             return True
+
     return False
 
 
-def _build_dissent_summary(
-    prosecutor: dict[str, Any], defense: dict[str, Any], tech_lead: dict[str, Any]
-) -> str:
+def _compute_weighted_score(prosecutor: JudicialOpinion, defense: JudicialOpinion, tech_lead: JudicialOpinion) -> float:
     return (
-        "High disagreement detected between judges (score variance > 2). "
-        f"Prosecutor({prosecutor['score']}): {prosecutor['argument']} | "
-        f"Defense({defense['score']}): {defense['argument']} | "
-        f"Tech Lead({tech_lead['score']}): {tech_lead['argument']}"
+        0.20 * prosecutor.score
+        + 0.25 * defense.score
+        + 0.55 * tech_lead.score
     )
 
 
-def _write_markdown_report(
-    state: AgentState,
-    prosecutor: dict[str, Any],
-    defense: dict[str, Any],
-    tech_lead: dict[str, Any],
-    final_score_5: float,
-    final_score_100: int,
-    verdict: str,
-    dissent_summary: str,
-    security_capped: bool,
-) -> str:
-    report_path = Path("reports") / "audit_results.md"
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-
-    def _list_items(items: list[str]) -> str:
-        if not items:
-            return "- None provided"
-        return "\n".join(f"- {item}" for item in items)
-
-    content = (
-        "# Audit Results\n\n"
-        f"- **Generated (UTC):** {datetime.now(timezone.utc).isoformat()}\n"
-        f"- **Repository:** {state.get('repo_url', 'Unknown')}\n"
-        "\n## Synthesis Rules Applied\n"
-        "- **Rule of Functionality:** Tech Lead score weighted most heavily.\n"
-        "- **Rule of Security:** Final score capped at 3/5 when Prosecutor flags security risk.\n"
-        "- **Dissent Rule:** If variance between judges is > 2, dissent summary is generated.\n"
-        f"- **Security Cap Triggered:** {'Yes' if security_capped else 'No'}\n"
-        "\n## Structured Judges\n"
-        f"### Prosecutor (Score: {prosecutor['score']}/5)\n"
-        f"{prosecutor['argument']}\n\n"
-        "**Cited Evidence**\n"
-        f"{_list_items(prosecutor['cited_evidence'])}\n\n"
-        f"### Defense (Score: {defense['score']}/5)\n"
-        f"{defense['argument']}\n\n"
-        "**Cited Evidence**\n"
-        f"{_list_items(defense['cited_evidence'])}\n\n"
-        f"### Tech Lead (Score: {tech_lead['score']}/5)\n"
-        f"{tech_lead['argument']}\n\n"
-        "**Cited Evidence**\n"
-        f"{_list_items(tech_lead['cited_evidence'])}\n\n"
-        "## Chief Justice Final Decision\n"
-        f"- **Final Score:** {final_score_5:.2f}/5 ({final_score_100}/100)\n"
-        f"- **Verdict:** {verdict}\n"
-        f"- **Dissent Summary:** {dissent_summary or 'No significant dissent detected.'}\n"
+def _build_dissent_summary(prosecutor: JudicialOpinion, defense: JudicialOpinion, tech_lead: JudicialOpinion) -> str:
+    return (
+        "High disagreement detected (score variance > 2). "
+        f"Prosecutor={prosecutor.score}: {prosecutor.argument} | "
+        f"Defense={defense.score}: {defense.argument} | "
+        f"TechLead={tech_lead.score}: {tech_lead.argument}"
     )
 
-    report_path.write_text(content, encoding="utf-8")
-    return str(report_path)
+
+def _build_remediation(final_score: int, security_capped: bool, dissent_summary: str) -> str:
+    if security_capped:
+        return "Address confirmed security vulnerability immediately and rerun full audit before release."
+    if dissent_summary:
+        return "Run adjudication review to reconcile conflicting judge assessments and gather missing evidence."
+    if final_score <= 2:
+        return "Prioritize architectural refactoring and reliability fixes before deployment."
+    if final_score == 3:
+        return "Implement targeted fixes and verify quality gates with a follow-up audit."
+    return "Maintain current implementation quality and continue monitoring with routine audits."
+
+
+def _build_executive_summary(criteria: list[CriterionResult], overall_score: float) -> str:
+    failed = [item for item in criteria if item.final_score < 3.5]
+    if not criteria:
+        return "Audit completed with no scored dimensions. Insufficient evidence and opinions were provided."
+    if failed:
+        return (
+            f"Audit completed with overall score {overall_score:.2f}/5. "
+            f"{len(failed)} dimension(s) require immediate remediation before release."
+        )
+    return f"Audit completed successfully with overall score {overall_score:.2f}/5 and no failing dimensions."
+
+
+def _build_remediation_plan(criteria: list[CriterionResult]) -> str:
+    if not criteria:
+        return "Collect rubric-aligned evidence and run all judge nodes before generating a final decision."
+
+    lines = [
+        f"- {criterion.dimension_name} ({criterion.dimension_id}): {criterion.remediation}"
+        for criterion in criteria
+    ]
+    return "\n".join(lines)
 
 
 def justice_node(state: AgentState):
-    metadata = state.get("metadata", {})
+    opinions = state.get("opinions", [])
+    rubric_dimensions = state.get("rubric_dimensions", [])
 
-    prosecutor = _extract_structured(metadata, "prosecutor_structured")
-    defense = _extract_structured(metadata, "defense_structured")
-    tech_lead = _extract_structured(metadata, "tech_lead_structured")
+    grouped_opinions = _group_opinions_by_dimension(opinions)
 
-    prosecutor_inverse = 6 - prosecutor["score"]
+    dimension_specs: list[tuple[str, str]] = []
+    for raw_dimension in rubric_dimensions:
+        if isinstance(raw_dimension, dict):
+            dimension_id = _get_dimension_id(raw_dimension)
+            dimension_name = _get_dimension_name(raw_dimension, dimension_id)
+            dimension_specs.append((dimension_id, dimension_name))
 
-    # Rule of Functionality: tech lead weighted most heavily.
-    weighted_score = (
-        0.60 * tech_lead["score"]
-        + 0.25 * defense["score"]
-        + 0.15 * prosecutor_inverse
+    if not dimension_specs:
+        known_dimension_ids = list(grouped_opinions.keys()) or list(state.get("evidences", {}).keys())
+        if not known_dimension_ids:
+            known_dimension_ids = ["general"]
+        dimension_specs = [(dimension_id, dimension_id) for dimension_id in known_dimension_ids]
+
+    criteria_results: list[CriterionResult] = []
+    missing_pairs: list[str] = []
+
+    for dimension_id, dimension_name in dimension_specs:
+        dimension_opinions = grouped_opinions.get(dimension_id, [])
+        prosecutor = _find_judge_opinion(dimension_opinions, "Prosecutor")
+        defense = _find_judge_opinion(dimension_opinions, "Defense")
+        tech_lead = _find_judge_opinion(dimension_opinions, "TechLead")
+
+        if prosecutor is None:
+            missing_pairs.append(f"{dimension_id}:Prosecutor")
+        if defense is None:
+            missing_pairs.append(f"{dimension_id}:Defense")
+        if tech_lead is None:
+            missing_pairs.append(f"{dimension_id}:TechLead")
+        if prosecutor is None or defense is None or tech_lead is None:
+            continue
+
+        weighted_score = _compute_weighted_score(prosecutor, defense, tech_lead)
+
+        security_capped = _security_cap_triggered(state, dimension_id, prosecutor)
+        if security_capped:
+            weighted_score = min(weighted_score, 3.0)
+
+        score_variance = max(prosecutor.score, defense.score, tech_lead.score) - min(
+            prosecutor.score, defense.score, tech_lead.score
+        )
+        dissent_summary = ""
+        if score_variance > 2:
+            dissent_summary = _build_dissent_summary(prosecutor, defense, tech_lead)
+
+        final_score = int(round(weighted_score))
+        final_score = max(1, min(5, final_score))
+
+        remediation = _build_remediation(final_score, security_capped, dissent_summary)
+
+        criteria_results.append(
+            CriterionResult(
+                dimension_id=dimension_id,
+                dimension_name=dimension_name,
+                final_score=final_score,
+                judge_opinions=[prosecutor, defense, tech_lead],
+                dissent_summary=dissent_summary or None,
+                remediation=remediation,
+            )
+        )
+
+    if missing_pairs:
+        return {
+            "final_report": None,
+            "audit_completed": False,
+        }
+
+    overall_score = round(
+        sum(criterion.final_score for criterion in criteria_results) / max(len(criteria_results), 1),
+        2,
     )
 
-    security_capped = _prosecutor_flags_security(prosecutor, state)
-    if security_capped:
-        weighted_score = min(weighted_score, 3.0)
-
-    score_variance = max(prosecutor["score"], defense["score"], tech_lead["score"]) - min(
-        prosecutor["score"], defense["score"], tech_lead["score"]
-    )
-    dissent_summary = ""
-    if score_variance > 2:
-        dissent_summary = _build_dissent_summary(prosecutor, defense, tech_lead)
-
-    final_score_5 = round(weighted_score, 2)
-    final_score_100 = int(round(final_score_5 * 20))
-    verdict = "PASS" if final_score_5 >= 3.5 else "FAIL"
-
-    reasoning = (
-        f"Chief Justice synthesis: tech-lead-weighted score {final_score_5}/5. "
-        f"Security cap applied: {'yes' if security_capped else 'no'}. "
-        f"Judge score variance: {score_variance}."
-    )
-    if dissent_summary:
-        reasoning += f" Dissent recorded: {dissent_summary}"
-
-    report_path = _write_markdown_report(
-        state=state,
-        prosecutor=prosecutor,
-        defense=defense,
-        tech_lead=tech_lead,
-        final_score_5=final_score_5,
-        final_score_100=final_score_100,
-        verdict=verdict,
-        dissent_summary=dissent_summary,
-        security_capped=security_capped,
+    report = AuditReport(
+        repo_url=state.get("repo_url", "Unknown repository"),
+        executive_summary=_build_executive_summary(criteria_results, overall_score),
+        overall_score=overall_score,
+        criteria=criteria_results,
+        remediation_plan=_build_remediation_plan(criteria_results),
     )
 
     return {
-        "opinion": JudicialOpinion(
-            score=final_score_100,
-            verdict=verdict,
-            recommendation="Proceed with monitored rollout." if verdict == "PASS" else "Address critical findings before release.",
-            reasoning=reasoning,
-        ),
-        "metadata": {
-            "chief_justice_score_5": final_score_5,
-            "chief_justice_score_100": final_score_100,
-            "chief_justice_verdict": verdict,
-            "security_cap_triggered": security_capped,
-            "score_variance": score_variance,
-            "dissent_summary": dissent_summary,
-            "audit_report_path": report_path,
-        },
+        "final_report": report,
         "audit_completed": True,
     }

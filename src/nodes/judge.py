@@ -1,97 +1,70 @@
-import os
-import time
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_groq import ChatGroq
-
-from src.state import AgentState, Evidence, JudicialOpinion
+from src.state import AgentState, JudicialOpinion
 
 
-def _format_judge_evidence(evidences: list[Evidence]) -> str:
-    if not evidences:
-        return "No evidences were provided."
-
-    rows: list[str] = []
-    for index, evidence in enumerate(evidences, start=1):
-        rows.append(
-            f"{index}. {evidence.title} | severity={evidence.severity} | "
-            f"source={evidence.source} | summary={evidence.summary}"
-        )
-    return "\n".join(rows)
+def _group_by_criterion(opinions: list[JudicialOpinion]) -> dict[str, list[JudicialOpinion]]:
+    grouped: dict[str, list[JudicialOpinion]] = {}
+    for opinion in opinions:
+        grouped.setdefault(opinion.criterion_id, []).append(opinion)
+    return grouped
 
 
-def _format_prosecutor_critique(critique: str) -> str:
-    cleaned = (critique or "").strip()
-    if not cleaned:
-        return "Prosecutor critique unavailable."
-    return f"Prosecutor Findings:\n{cleaned}"
+def _collect_dimension_ids(state: AgentState, grouped: dict[str, list[JudicialOpinion]]) -> list[str]:
+    dimension_ids: list[str] = []
+
+    for raw_dimension in state.get("rubric_dimensions", []):
+        if isinstance(raw_dimension, dict):
+            dimension_id = str(
+                raw_dimension.get("id")
+                or raw_dimension.get("dimension_id")
+                or raw_dimension.get("criterion_id")
+                or ""
+            ).strip()
+            if dimension_id and dimension_id not in dimension_ids:
+                dimension_ids.append(dimension_id)
+
+    for dimension_id in state.get("evidences", {}).keys():
+        if dimension_id not in dimension_ids:
+            dimension_ids.append(dimension_id)
+
+    for dimension_id in grouped.keys():
+        if dimension_id not in dimension_ids:
+            dimension_ids.append(dimension_id)
+
+    if not dimension_ids:
+        dimension_ids.append("general")
+
+    return dimension_ids
 
 
-def _format_defense_counsel(defense_text: str) -> str:
-    cleaned = (defense_text or "").strip()
-    if not cleaned:
-        return "Defense argument unavailable."
-    return f"Defense Argument:\n{cleaned}"
+def _dedupe_opinions(opinions: list[JudicialOpinion]) -> list[JudicialOpinion]:
+    deduped: list[JudicialOpinion] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for opinion in opinions:
+        key = (opinion.criterion_id, opinion.judge)
+        if key in seen_pairs:
+            continue
+        seen_pairs.add(key)
+        deduped.append(opinion)
+    return deduped
 
 
 def judge_node(state: AgentState):
-    evidences = state.get("evidences", [])
-    prosecutor_critique = (state.get("prosecutor_critique") or "").strip()
-    defense_counsel = (state.get("defense_counsel") or "").strip()
-    score = 100
+    """Validate complete per-criterion coverage from all three judges without neutral fallback."""
+    opinions = state.get("opinions", [])
+    opinions = _dedupe_opinions(opinions)
+    grouped = _group_by_criterion(opinions)
+    dimension_ids = _collect_dimension_ids(state, grouped)
 
-    for ev in evidences:
-        if ev.severity == 5:
-            score -= 20
-        elif ev.severity == 3:
-            score -= 10
+    required_judges = ("Prosecutor", "Defense", "TechLead")
+    missing_pairs: list[str] = []
 
-    if prosecutor_critique:
-        critique_lower = prosecutor_critique.lower()
-        if any(keyword in critique_lower for keyword in ["critical", "severe", "high risk", "failed", "block"]):
-            score -= 10
+    for dimension_id in dimension_ids:
+        criterion_opinions = grouped.get(dimension_id, [])
+        for judge in required_judges:
+            if not any(opinion.judge == judge for opinion in criterion_opinions):
+                missing_pairs.append(f"{dimension_id}:{judge}")
 
-    score = max(0, score)
-    verdict_val = "PASS" if score >= 70 else "FAIL"
+    if missing_pairs:
+        return {"audit_completed": False}
 
-    judge_prompt = (
-        "You are the final judicial auditor. Review the structured evidence, the prosecutor critique, and the defense argument. "
-        "Explicitly compare prosecutor_critique versus defense_counsel before issuing your verdict. "
-        "Do not invent facts. Explain the final verdict clearly and provide strict remediation guidance.\n\n"
-        f"Structured Evidence:\n{_format_judge_evidence(evidences)}\n\n"
-        f"Prosecutor Critique:\n{prosecutor_critique or 'No prosecutor critique provided.'}\n\n"
-        f"Defense Argument:\n{defense_counsel or 'No defense argument provided.'}\n\n"
-        f"Computed Final Score: {score}\n"
-        f"Computed Verdict: {verdict_val}"
-    )
-
-    reasoning_text = f"Final score {score}/100 calculated from {len(evidences)} forensic checks."
-    try:
-        model = ChatGroq(
-            model="llama-3.3-70b-versatile",
-            temperature=0.1,
-            groq_api_key=os.getenv('GROQ_API_KEY'),
-        )
-        time.sleep(2)
-        response = model.invoke(
-            [
-                SystemMessage(content="You are a strict, concise software audit judge."),
-                HumanMessage(content=judge_prompt),
-            ]
-        )
-        candidate_reasoning = (response.content or "").strip()
-        if candidate_reasoning:
-            reasoning_text = candidate_reasoning
-    except Exception:
-        pass
-
-    return {
-        "opinion": JudicialOpinion(
-            score=score,
-            verdict=verdict_val,
-            recommendation="Proceed to Phase 2" if verdict_val == "PASS" else "Fix critical audit/security failures.",
-            reasoning=reasoning_text,
-        ),
-        "prosecutor_critique": _format_prosecutor_critique(prosecutor_critique),
-        "defense_counsel": _format_defense_counsel(defense_counsel),
-        "audit_completed": True,
-    }
+    return {"opinions": opinions}

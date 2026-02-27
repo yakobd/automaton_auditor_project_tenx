@@ -11,53 +11,68 @@ from src.nodes.tech_lead import tech_lead_node
 from src.nodes.justice import justice_node
 from src.tools.repo_tools import clone_peer_repo
 
+
+def _evidence(goal: str, found: bool, content: str, location: str, rationale: str, confidence: float = 1.0) -> Evidence:
+    return Evidence(
+        goal=goal,
+        found=found,
+        content=content,
+        location=location,
+        rationale=rationale,
+        confidence=confidence,
+    )
+
 # 1. CLONE NODE
 def clone_repo_node(state: AgentState):
     repo_url = state.get("repo_url", "")
     if not repo_url:
         return {
             "repo_path": "",
-            "evidences": [
-                Evidence(
-                    title="Repository Clone",
-                    severity=5,
-                    summary="Clone failed: missing repository URL.",
-                    source="Clone Node",
-                    rationale="No repo_url was provided in AgentState, so the audit cannot start.",
-                    confidence=1.0,
-                ),
-                Evidence(
-                    title="Audit Execution",
-                    severity=5,
-                    summary="Parallel analysis skipped due to clone failure.",
-                    source="Router",
-                    rationale="Without a valid clone path, detective nodes are bypassed and routed directly to judge.",
-                    confidence=1.0,
-                ),
-            ],
+            "evidences": {
+                "repository_clone": [
+                    _evidence(
+                        goal="Repository clone operation succeeds",
+                        found=False,
+                        content="Clone failed: missing repository URL.",
+                        location="state.repo_url",
+                        rationale="No repo_url was provided in AgentState, so the audit cannot start.",
+                    )
+                ],
+                "audit_execution": [
+                    _evidence(
+                        goal="Audit execution can proceed after clone",
+                        found=False,
+                        content="Clone prerequisite unmet; downstream analysis reliability is reduced.",
+                        location="clone_repo_node",
+                        rationale="Without a valid clone path, forensic checks cannot rely on repository contents.",
+                    )
+                ],
+            },
         }
     path = clone_peer_repo(repo_url)
     if not path or (isinstance(path, str) and "Error" in path):
         return {
             "repo_path": path or "",
-            "evidences": [
-                Evidence(
-                    title="Repository Clone",
-                    severity=5,
-                    summary=f"Clone failed: {path or 'Unknown clone error'}",
-                    source="Clone Node",
-                    rationale="The repository could not be cloned into the forensic sandbox.",
-                    confidence=1.0,
-                ),
-                Evidence(
-                    title="Audit Execution",
-                    severity=5,
-                    summary="Parallel analysis skipped due to clone failure.",
-                    source="Router",
-                    rationale="Without a valid clone path, detective nodes are bypassed and routed directly to judge.",
-                    confidence=1.0,
-                ),
-            ],
+            "evidences": {
+                "repository_clone": [
+                    _evidence(
+                        goal="Repository clone operation succeeds",
+                        found=False,
+                        content=f"Clone failed: {path or 'Unknown clone error'}",
+                        location=repo_url,
+                        rationale="The repository could not be cloned into the forensic sandbox.",
+                    )
+                ],
+                "audit_execution": [
+                    _evidence(
+                        goal="Audit execution can proceed after clone",
+                        found=False,
+                        content="Clone failure limits repository-based forensic analysis.",
+                        location="clone_repo_node",
+                        rationale="Without a valid clone path, detective nodes cannot inspect source files reliably.",
+                    )
+                ],
+            },
         }
     return {"repo_path": path}
 
