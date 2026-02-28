@@ -4,6 +4,14 @@ Automaton Auditor is a LangGraph-based forensic workflow that audits peer reposi
 
 ---
 
+## Forensic Provenance
+
+- All `audit_report.md` and `.pdf` outputs are generated through the Judicial Swarm workflow.
+- Final criterion scores are synthesized using a Weighted Average across Prosecutor, Defense, and Tech Lead judicial opinions.
+- Forensic evidence is collected through AST Analysis of repository source code and RAG-lite Retrieval over repository documentation.
+
+---
+
 ## 🚀 Quick Start & Operations
 
 ### Technical Requirements
