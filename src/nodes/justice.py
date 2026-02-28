@@ -3,8 +3,92 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_groq import ChatGroq
+
 from src.state import AgentState, AuditReport, CriterionResult, JudicialOpinion
-from src.nodes.judges import judge_node
+
+
+def _resolve_criterion_ids(state: AgentState) -> list[str]:
+    ids = [
+        str(dimension.get("id") or "")
+        for dimension in state.get("rubric_dimensions", [])
+        if isinstance(dimension, dict)
+    ]
+    return ids if ids else ["documentation_coverage", "langgraph_usage", "security_hardening"]
+
+
+def _invoke_structured_opinion(
+    system_prompt: str,
+    user_prompt: str,
+    criterion_id: str,
+    judge_name: str,
+    model_name: str,
+    temperature: float,
+) -> JudicialOpinion | None:
+    try:
+        llm = ChatGroq(
+            model=model_name,
+            temperature=temperature,
+            groq_api_key=os.getenv("GROQ_API_KEY"),
+        ).with_structured_output(JudicialOpinion)
+        response = llm.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_prompt),
+        ])
+        if response:
+            return response.model_copy(update={"judge": judge_name, "criterion_id": criterion_id})
+    except Exception:
+        return None
+    return None
+
+
+def prosecutor_node(state: AgentState):
+    opinions: list[JudicialOpinion] = []
+    for criterion_id in _resolve_criterion_ids(state):
+        opinion = _invoke_structured_opinion(
+            "Strict Prosecutor. Find flaws.",
+            f"Audit {criterion_id}",
+            criterion_id,
+            "Prosecutor",
+            "llama-3.1-8b-instant",
+            0.1,
+        )
+        if opinion:
+            opinions.append(opinion)
+    return {"opinions": opinions}
+
+
+def defense_node(state: AgentState):
+    opinions: list[JudicialOpinion] = []
+    for criterion_id in _resolve_criterion_ids(state):
+        opinion = _invoke_structured_opinion(
+            "Defense Counsel. Highlight strengths.",
+            f"Audit {criterion_id}",
+            criterion_id,
+            "Defense",
+            "llama-3.1-8b-instant",
+            0.3,
+        )
+        if opinion:
+            opinions.append(opinion)
+    return {"opinions": opinions}
+
+
+def tech_lead_node(state: AgentState):
+    opinions: list[JudicialOpinion] = []
+    for criterion_id in _resolve_criterion_ids(state):
+        opinion = _invoke_structured_opinion(
+            "Tech Lead. Neutral arbitrator.",
+            f"Audit {criterion_id}",
+            criterion_id,
+            "TechLead",
+            "llama-3.3-70b-versatile",
+            0.2,
+        )
+        if opinion:
+            opinions.append(opinion)
+    return {"opinions": opinions}
 
 
 def _get_dimension_id(raw_dimension: dict) -> str:
@@ -206,6 +290,44 @@ def _write_final_markdown(report: AuditReport) -> str:
     return file_path
 
 
+def _compute_evidence_found_score(state: AgentState) -> tuple[float, int, int]:
+    evidence_map = state.get("evidences", {}) or {}
+    evidence_items: list = []
+
+    if isinstance(evidence_map, dict):
+        for value in evidence_map.values():
+            if isinstance(value, list):
+                evidence_items.extend(value)
+            elif value is not None:
+                evidence_items.append(value)
+    elif isinstance(evidence_map, list):
+        evidence_items.extend(evidence_map)
+
+    total_count = 0
+    found_count = 0
+
+    for evidence in evidence_items:
+        total_count += 1
+        if isinstance(evidence, dict):
+            raw_found_value = evidence.get("found", False)
+        else:
+            raw_found_value = getattr(evidence, "found", False)
+
+        if isinstance(raw_found_value, str):
+            found_value = raw_found_value.strip().lower() in {"true", "1", "yes", "y", "found", "✅ found"}
+        else:
+            found_value = bool(raw_found_value)
+
+        if found_value:
+            found_count += 1
+
+    if total_count == 0:
+        return 0.0, 0, 0
+
+    score_float = round((found_count / total_count) * 5, 2)
+    return score_float, found_count, total_count
+
+
 def justice_node(state: AgentState):
     opinions = state.get("opinions", [])
     rubric_dimensions = state.get("rubric_dimensions", [])
@@ -313,15 +435,12 @@ def justice_node(state: AgentState):
 
 
 def chief_justice_node(state: AgentState):
-    validation_update = judge_node(state)
+    opinions = state.get("opinions", [])
     markdown_output = ""
     score_float = 0.0
 
-    if validation_update.get("audit_completed") is False:
-        markdown_output = ""
-        score_float = 0.0
-    else:
-        merged_state = state.model_copy(update=validation_update)
+    if opinions:
+        merged_state = state.model_copy(update={"opinions": opinions})
         justice_update = justice_node(merged_state)
         report = justice_update.get("final_report")
 
@@ -329,16 +448,53 @@ def chief_justice_node(state: AgentState):
             markdown_output = _render_report_markdown(report)
             score_float = float(justice_update.get("overall_score") or report.overall_score or 0.0)
         else:
-            markdown_output = ""
-            score_float = 0.0
+            score_float, found_count, total_count = _compute_evidence_found_score(state)
+            print(f"[chief_justice_node] fallback evidence found={found_count}, total={total_count}")
+            markdown_output = "\n".join(
+                [
+                    "# Audit Results",
+                    "",
+                    f"- **Repository:** {state.get('repo_url', 'Unknown repository')}",
+                    f"- **Overall Score:** {score_float}/5",
+                    "",
+                    "## Executive Summary",
+                    (
+                        "Judge opinions were incomplete; score was computed from collected evidence "
+                        f"({found_count}/{total_count} findings marked as found)."
+                    ),
+                    "",
+                ]
+            )
+    else:
+        score_float, found_count, total_count = _compute_evidence_found_score(state)
+        print(f"[chief_justice_node] fallback evidence found={found_count}, total={total_count}")
+        markdown_output = "\n".join(
+            [
+                "# Audit Results",
+                "",
+                f"- **Repository:** {state.get('repo_url', 'Unknown repository')}",
+                f"- **Overall Score:** {score_float}/5",
+                "",
+                "## Executive Summary",
+                (
+                    "Judge opinions were not generated; score was computed from collected evidence "
+                    f"({found_count}/{total_count} findings marked as found)."
+                ),
+                "",
+            ]
+        )
 
     output_path = Path("audit") / "report_onself_generated" / "audit_report.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(markdown_output, encoding="utf-8")
 
+    overall_score = f"{score_float:.1f}"
     verdict_string = "PASS" if score_float >= 3.5 else "FAIL"
+    print(f"Final Score Calculated: {overall_score}")
     return {
         "final_report": markdown_output,
-        "overall_score": score_float,
+        "overall_score": overall_score,
         "audit_verdict": verdict_string,
+        "final_report_path": str(output_path),
+        "audit_completed": True,
     }
