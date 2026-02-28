@@ -60,6 +60,15 @@ def _extract_github_username(repo_url: str) -> str:
     return safe_username or "unknown_user"
 
 
+def _print_evidence_status(goal: str, found: bool) -> None:
+    status = "✅ FOUND" if found else "❌ NOT FOUND"
+    try:
+        print(f"  {status} {goal}")
+    except UnicodeEncodeError:
+        fallback_status = "[PASS] FOUND" if found else "[FAIL] NOT FOUND"
+        print(f"  {fallback_status} {goal}")
+
+
 def _save_unique_report(final_report, repo_url: str) -> str | None:
     os.makedirs("audit/report_onself_generated", exist_ok=True)
     os.makedirs("result", exist_ok=True)
@@ -241,8 +250,7 @@ def run_audit(url: str):
                 found = getattr(ev, "found", False)
                 rationale = getattr(ev, "rationale", "No rationale provided")
                 confidence = getattr(ev, "confidence", 0.0)
-                status = "✅ FOUND" if found else "❌ NOT FOUND"
-                print(f"  {status} {goal}")
+                _print_evidence_status(goal, found)
                 print(f"    Rationale: {rationale}")
                 print(f"    Confidence: {int(float(confidence) * 100)}%\n")
 
