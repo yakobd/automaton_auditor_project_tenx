@@ -68,7 +68,7 @@ def defense_node(state: AgentState):
             criterion_id,
             "Defense",
             "llama-3.1-8b-instant",
-            0.3,
+            0.1,
         )
         if opinion:
             opinions.append(opinion)
@@ -83,8 +83,8 @@ def tech_lead_node(state: AgentState):
             f"Audit {criterion_id}",
             criterion_id,
             "TechLead",
-            "llama-3.3-70b-versatile",
-            0.2,
+            "llama-3.1-8b-instant",
+            0.1,
         )
         if opinion:
             opinions.append(opinion)
@@ -436,53 +436,24 @@ def justice_node(state: AgentState):
 
 def chief_justice_node(state: AgentState):
     opinions = state.get("opinions", [])
-    markdown_output = ""
     score_float = 0.0
 
     if opinions:
-        merged_state = state.model_copy(update={"opinions": opinions})
-        justice_update = justice_node(merged_state)
-        report = justice_update.get("final_report")
+        grouped_opinions = _group_opinions_by_dimension(opinions)
+        dimension_scores: list[float] = []
+        for judge_list in grouped_opinions.values():
+            if not judge_list:
+                continue
+            dimension_scores.append(sum(opinion.score for opinion in judge_list) / len(judge_list))
 
-        if isinstance(report, AuditReport):
-            markdown_output = _render_report_markdown(report)
-            score_float = float(justice_update.get("overall_score") or report.overall_score or 0.0)
+        if dimension_scores:
+            score_float = round(sum(dimension_scores) / len(dimension_scores), 2)
         else:
-            score_float, found_count, total_count = _compute_evidence_found_score(state)
-            print(f"[chief_justice_node] fallback evidence found={found_count}, total={total_count}")
-            markdown_output = "\n".join(
-                [
-                    "# Audit Results",
-                    "",
-                    f"- **Repository:** {state.get('repo_url', 'Unknown repository')}",
-                    f"- **Overall Score:** {score_float}/5",
-                    "",
-                    "## Executive Summary",
-                    (
-                        "Judge opinions were incomplete; score was computed from collected evidence "
-                        f"({found_count}/{total_count} findings marked as found)."
-                    ),
-                    "",
-                ]
-            )
+            score_float, _, _ = _compute_evidence_found_score(state)
     else:
-        score_float, found_count, total_count = _compute_evidence_found_score(state)
-        print(f"[chief_justice_node] fallback evidence found={found_count}, total={total_count}")
-        markdown_output = "\n".join(
-            [
-                "# Audit Results",
-                "",
-                f"- **Repository:** {state.get('repo_url', 'Unknown repository')}",
-                f"- **Overall Score:** {score_float}/5",
-                "",
-                "## Executive Summary",
-                (
-                    "Judge opinions were not generated; score was computed from collected evidence "
-                    f"({found_count}/{total_count} findings marked as found)."
-                ),
-                "",
-            ]
-        )
+        score_float, _, _ = _compute_evidence_found_score(state)
+
+    markdown_output = f"Overall Score: {score_float:.1f}/5"
 
     output_path = Path("audit") / "report_onself_generated" / "audit_report.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -495,6 +466,6 @@ def chief_justice_node(state: AgentState):
         "final_report": markdown_output,
         "overall_score": overall_score,
         "audit_verdict": verdict_string,
-        "final_report_path": str(output_path),
+        "final_report_path": output_path.as_posix(),
         "audit_completed": True,
     }
