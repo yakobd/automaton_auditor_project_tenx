@@ -55,6 +55,8 @@ def _extract_github_username(repo_url: str) -> str:
 
 
 def _save_unique_report(final_report, repo_url: str) -> str | None:
+    os.makedirs("result", exist_ok=True)
+
     if final_report is None:
         return None
 
@@ -67,8 +69,7 @@ def _save_unique_report(final_report, repo_url: str) -> str | None:
         return None
 
     username = _extract_github_username(repo_url)
-    os.makedirs("reports", exist_ok=True)
-    report_path = os.path.join("reports", f"audit_report_{username}.md")
+    report_path = os.path.join("result", f"audit_report_{username}.md")
 
     executive_summary = str(report_payload.get("executive_summary") or "No executive summary available.")
     overall_score = report_payload.get("overall_score", "N/A")
@@ -84,7 +85,7 @@ def _save_unique_report(final_report, repo_url: str) -> str | None:
         "## Executive Summary",
         executive_summary,
         "",
-        "## Criteria",
+        "## Criterion Breakdown",
     ]
 
     for criterion in criteria:
@@ -107,10 +108,13 @@ def _save_unique_report(final_report, repo_url: str) -> str | None:
             [
                 "",
                 f"### {dimension_name} ({dimension_id})",
-                f"- **Final Score:** {final_score}/5",
-                f"- **Dissent Summary:** {dissent_summary}",
-                f"- **Remediation:** {remediation}",
-                "- **Judge Opinions:**",
+                "#### Final Score",
+                f"{final_score}/5",
+                "#### Dissent Summary",
+                f"{dissent_summary}",
+                "#### Remediation",
+                f"{remediation}",
+                "#### Judge Opinions",
             ]
         )
 
@@ -131,7 +135,7 @@ def _save_unique_report(final_report, repo_url: str) -> str | None:
     with open(report_path, "w", encoding="utf-8") as report_file:
         report_file.write(report_content)
 
-    with open("audit_result.md", "w", encoding="utf-8") as latest_report_file:
+    with open(os.path.join("result", "audit_result.md"), "w", encoding="utf-8") as latest_report_file:
         latest_report_file.write(report_content)
 
     return report_path
@@ -238,7 +242,7 @@ def run_audit(url: str):
     if unique_report_path:
         username = _extract_github_username(url)
         print(
-            f"Report updated for {username} in reports/ folder and mirrored to audit_result.md"
+            f"Reports generated in the result/ folder: audit_report_{username}.md and audit_result.md"
         )
     else:
         print("--- AUDIT COMPLETE: No unique report file was saved. ---")

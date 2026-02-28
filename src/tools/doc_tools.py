@@ -49,12 +49,25 @@ def select_relevant_chunks(text_content: str, queries: list[str], max_chunks: in
     return [chunk for _, chunk in scored[:max_chunks]]
 
 
-def _convert_pdf_with_timeout(pdf_path: Path, timeout_seconds: float = 30.0):
+def _convert_pdf_with_timeout(pdf_path: Path, timeout_seconds: float = 60.0):
     """Run Docling conversion with a timeout so long PDFs do not block the full audit."""
 
     def _convert_once():
-        from docling.document_converter import DocumentConverter
-        converter = DocumentConverter()
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.document_converter import DocumentConverter, InputFormat, PdfFormatOption
+
+        pipeline_options = PdfPipelineOptions(
+            do_ocr=False,
+            do_table_structure=True,
+            force_backend_text=True,
+            document_timeout=60.0,
+        )
+
+        converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
+            }
+        )
         return converter.convert(str(pdf_path))
 
     executor = ThreadPoolExecutor(max_workers=1)
@@ -96,7 +109,7 @@ def analyze_repo_pdf(repo_path: str, rubric_queries: list[str] | None = None) ->
 
     try:
         # 1. EXPLICIT PARSING
-        conversion_result = _convert_pdf_with_timeout(pdf_path, timeout_seconds=30.0)
+        conversion_result = _convert_pdf_with_timeout(pdf_path, timeout_seconds=60.0)
 
         if hasattr(conversion_result, "document") and hasattr(
             conversion_result.document, "export_to_markdown"
@@ -139,7 +152,7 @@ def analyze_repo_pdf(repo_path: str, rubric_queries: list[str] | None = None) ->
             goal="Documentation contains rubric-relevant technical indicators",
             found=False,
             content=(
-                "Forensic Tool Timeout: PDF parsing exceeded 30 seconds and was safely aborted. "
+                "Forensic Tool Timeout: PDF parsing exceeded 60 seconds and was safely aborted. "
                 "Proceeding without blocking the rest of the audit."
             ),
             location=str(pdf_path),

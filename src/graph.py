@@ -4,10 +4,7 @@ from src.nodes.detectives import (
     repo_investigator_node, 
     doc_analyst_node,
 )
-from src.nodes.judge import judge_node
-from src.nodes.defense import defense_node
-from src.nodes.prosecutor import prosecutor_node
-from src.nodes.tech_lead import tech_lead_node
+from src.nodes.judges import judge_node, prosecutor_node, defense_node, tech_lead_node
 from src.nodes.justice import justice_node
 from src.tools.repo_tools import clone_peer_repo
 
