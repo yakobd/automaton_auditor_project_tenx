@@ -61,6 +61,7 @@ class Evidence(BaseModel):
     location: str = Field(description="File path or commit hash")
     rationale: str = Field(description="Rationale for confidence in this evidence")
     confidence: float = Field(ge=0.0, le=1.0)
+    source_line: int = Field(default=-1, description="Best-effort source line reference for the finding")
 
 # --- Judge Output  ---
 class JudicialOpinion(BaseModel):
@@ -78,11 +79,14 @@ class CriterionResult(BaseModel):
     judge_opinions: List[JudicialOpinion]
     dissent_summary: Optional[str] = None
     remediation: str
+    cited_line_numbers: List[int] = Field(default_factory=list)
+    file_fix_instructions: List[str] = Field(default_factory=list)
 
 class AuditReport(BaseModel):
     repo_url: str
     executive_summary: str
     overall_score: float
+    audit_verdict: Literal["PASS", "FAIL", "DISSENT_DETECTED"]
     criteria: List[CriterionResult]
     remediation_plan: str
 
@@ -109,7 +113,7 @@ class AgentState(BaseModel):
     opinions: Annotated[List[JudicialOpinion], operator.add] = Field(default_factory=list)
     final_report: Optional[AuditReport | str] = None
     overall_score: Optional[float] = None
-    audit_verdict: Optional[Literal["PASS", "FAIL"]] = None
+    audit_verdict: Optional[Literal["PASS", "FAIL", "DISSENT_DETECTED"]] = None
     final_report_path: Optional[str] = None
     audit_completed: bool = False
 

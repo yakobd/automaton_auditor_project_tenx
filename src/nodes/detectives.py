@@ -4,7 +4,7 @@ from pathlib import Path
 
 from src.state import AgentState, Evidence
 from src.tools.doc_tools import analyze_repo_pdf
-from src.tools.repo_tools import clone_peer_repo, get_commit_metadata
+from src.tools.repo_tools import clone_peer_repo, get_commit_metadata, analyze_graph_state_contract
 
 
 def _evidence(
@@ -14,6 +14,7 @@ def _evidence(
     location: str,
     rationale: str,
     confidence: float,
+    source_line: int = -1,
 ) -> Evidence:
     return Evidence(
         goal=goal,
@@ -22,6 +23,7 @@ def _evidence(
         location=location,
         rationale=rationale,
         confidence=confidence,
+        source_line=source_line,
     )
 
 
@@ -40,11 +42,17 @@ def _normalize_doc_evidence(raw: object, repo_path: str) -> Evidence:
         getattr(raw, "rationale", "Evaluated repository PDF documentation for required technical indicators.")
     )
     confidence = getattr(raw, "confidence", 0.85)
+    source_line = getattr(raw, "source_line", -1)
     try:
         confidence_value = float(confidence)
     except Exception:
         confidence_value = 0.85
     confidence_value = max(0.0, min(1.0, confidence_value))
+
+    try:
+        source_line_value = int(source_line)
+    except Exception:
+        source_line_value = -1
 
     return _evidence(
         goal=goal,
@@ -53,6 +61,7 @@ def _normalize_doc_evidence(raw: object, repo_path: str) -> Evidence:
         location=location,
         rationale=rationale,
         confidence=confidence_value,
+        source_line=source_line_value,
     )
 
 
@@ -213,16 +222,8 @@ def repo_investigator_node(state: AgentState):
     ]
     secrets_ok = len(leaked) == 0
 
-    python_files = list(repo_root.rglob("*.py"))
-    has_formal_graph = False
-    forensic_errors: list[str] = []
-    for file_path in python_files:
-        is_found, message = analyze_graph_structure(str(file_path))
-        if is_found:
-            has_formal_graph = True
-            break
-        if "Forensic Error" in message:
-            forensic_errors.append(message)
+    ast_contract = analyze_graph_state_contract(str(repo_root))
+    has_formal_graph = bool(ast_contract.get("graph_structure_verified", False))
 
     metadata = get_commit_metadata(cloned_path)
     total_commits = int(metadata.get("total_commits", 0))
@@ -250,9 +251,7 @@ def repo_investigator_node(state: AgentState):
     elif git_history_status != "ok":
         atomic_assessment += f"\nGit history status: {git_history_status}"
 
-    langgraph_content = "StateGraph detected." if has_formal_graph else "No StateGraph detected."
-    if forensic_errors:
-        langgraph_content += f" Parser forensic errors: {len(forensic_errors)}"
+    langgraph_content = str(ast_contract.get("summary", "AST contract analysis unavailable."))
 
     return {
         "evidences": {
@@ -261,9 +260,13 @@ def repo_investigator_node(state: AgentState):
                     goal="Presence of LangGraph StateGraph implementation",
                     found=has_formal_graph,
                     content=langgraph_content,
-                    location=str(repo_root),
-                    rationale="AST verification checks for explicit LangGraph StateGraph construction.",
-                    confidence=0.95,
+                    location=str(ast_contract.get("graph_file", str(repo_root))),
+                    rationale=(
+                        "Deep AST verification checks for StateGraph builder usage with builder.add_node/builder.add_edge "
+                        "and cross-checks Annotated reducers (operator.add) in src/state.py."
+                    ),
+                    confidence=0.98 if has_formal_graph else 0.4,
+                    source_line=(ast_contract.get("add_node_lines") or ast_contract.get("add_edge_lines") or [-1])[0],
                 )
             ],
             "atomic_progress": [
@@ -274,6 +277,7 @@ def repo_investigator_node(state: AgentState):
                     location=str(repo_root / ".git"),
                     rationale="Uses git log commit history to verify incremental commits and flag single big initial-commit patterns.",
                     confidence=1.0,
+                    source_line=-1,
                 )
             ],
             "repository_hygiene": [
@@ -288,6 +292,7 @@ def repo_investigator_node(state: AgentState):
                     location=str(repo_root),
                     rationale="Large binary files reduce repository hygiene and complicate source control workflows.",
                     confidence=0.9,
+                    source_line=-1,
                 )
             ],
             "security_hardening": [
@@ -302,6 +307,7 @@ def repo_investigator_node(state: AgentState):
                     location=str(repo_root),
                     rationale="Presence of committed secret artifacts is a direct security vulnerability signal.",
                     confidence=1.0,
+                    source_line=-1,
                 )
             ],
         },
@@ -346,6 +352,90 @@ def doc_analyst_node(state: AgentState):
             location=repo_path,
             rationale="Analyzer failure prevents reliable extraction of documentation evidence.",
             confidence=1.0,
+            source_line=-1,
         )
 
-    return {"evidences": {"documentation_coverage": [doc_evidence]}}
+    ast_contract = analyze_graph_state_contract(repo_path)
+    ast_verified = bool(ast_contract.get("graph_structure_verified", False))
+    graph_file = str(ast_contract.get("graph_file", repo_path))
+
+    doc_evidence_list: list[Evidence] = [doc_evidence]
+    if doc_evidence.found and not ast_verified:
+        doc_evidence_list.append(
+            _evidence(
+                goal="Cross-reference documentation claims with deterministic AST findings",
+                found=False,
+                content="Hallucination Risk: Documentation claims graph/state features that were not proven by AST parser.",
+                location=graph_file,
+                rationale=(
+                    "PDF analysis indicated feature presence, but deterministic AST validation did not confirm required "
+                    "builder.add_node/builder.add_edge and Annotated reducer contracts."
+                ),
+                confidence=0.25,
+                source_line=(ast_contract.get("add_node_lines") or ast_contract.get("add_edge_lines") or [-1])[0],
+            )
+        )
+
+    return {"evidences": {"documentation_coverage": doc_evidence_list}}
+
+
+def vision_inspector_node(state: AgentState):
+    repo_path = state.get("repo_path", "")
+
+    if not repo_path:
+        return {
+            "evidences": {
+                "swarm_visual": [
+                    _evidence(
+                        goal="Architectural diagram artifacts are present",
+                        found=False,
+                        content="No visual artifacts found; architecture must be inferred from code.",
+                        location="state.repo_path",
+                        rationale="Vision inspector cannot scan for diagrams without a cloned repository path.",
+                        confidence=0.2,
+                        source_line=-1,
+                    )
+                ]
+            }
+        }
+
+    repo_root = Path(repo_path)
+    visual_files = [
+        file_path
+        for file_path in repo_root.rglob("*")
+        if file_path.is_file() and file_path.suffix.lower() in {".png", ".jpg", ".jpeg"}
+    ]
+
+    if not visual_files:
+        return {
+            "evidences": {
+                "swarm_visual": [
+                    _evidence(
+                        goal="Architectural diagram artifacts are present",
+                        found=False,
+                        content="No visual artifacts found; architecture must be inferred from code.",
+                        location=str(repo_root),
+                        rationale="No PNG/JPG architectural diagrams were discovered in the repository tree.",
+                        confidence=0.35,
+                        source_line=-1,
+                    )
+                ]
+            }
+        }
+
+    listed_visuals = ", ".join(str(file_path.relative_to(repo_root)) for file_path in visual_files[:8])
+    return {
+        "evidences": {
+            "swarm_visual": [
+                _evidence(
+                    goal="Architectural diagram artifacts are present",
+                    found=True,
+                    content=f"Architectural visual artifacts detected: {listed_visuals}",
+                    location=str(repo_root),
+                    rationale="Detected PNG/JPG files that can support architecture visualization evidence.",
+                    confidence=0.9,
+                    source_line=-1,
+                )
+            ]
+        }
+    }

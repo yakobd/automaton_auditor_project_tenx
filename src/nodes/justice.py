@@ -252,6 +252,7 @@ def _render_report_markdown(report: AuditReport) -> str:
         "",
         f"- **Repository:** {report.repo_url}",
         f"- **Overall Score:** {report.overall_score}/5",
+        f"- **Final Verdict:** {report.audit_verdict}",
         "",
         "## Executive Summary",
         report.executive_summary,
@@ -266,6 +267,12 @@ def _render_report_markdown(report: AuditReport) -> str:
                 f"### {criterion.dimension_name} ({criterion.dimension_id})",
                 "#### Final Score",
                 f"{criterion.final_score}/5",
+                "#### Cited Line Numbers",
+                (
+                    ", ".join(str(line) for line in criterion.cited_line_numbers)
+                    if criterion.cited_line_numbers
+                    else "No line-level citations available."
+                ),
                 "#### Dissent Summary",
                 criterion.dissent_summary or "No significant dissent detected.",
                 "#### Remediation",
@@ -278,7 +285,20 @@ def _render_report_markdown(report: AuditReport) -> str:
                 f"  - {opinion.judge}: score={opinion.score}, argument={opinion.argument}"
             )
 
-    lines.extend(["", "## Remediation Plan", report.remediation_plan, ""])
+    lines.extend(["", "## Remediation Plan", report.remediation_plan])
+    for criterion in report.criteria:
+        lines.extend(
+            [
+                "",
+                f"### {criterion.dimension_name} ({criterion.dimension_id})",
+            ]
+        )
+        if criterion.file_fix_instructions:
+            lines.extend([f"- {fix_step}" for fix_step in criterion.file_fix_instructions])
+        else:
+            lines.append("- No file-level fix instructions required.")
+
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -420,6 +440,7 @@ def justice_node(state: AgentState):
         repo_url=state.get("repo_url", "Unknown repository"),
         executive_summary=_build_executive_summary(criteria_results, overall_score),
         overall_score=overall_score,
+        audit_verdict="PASS" if overall_score >= 3.5 else "FAIL",
         criteria=criteria_results,
         remediation_plan=_build_remediation_plan(criteria_results),
     )
@@ -437,10 +458,134 @@ def justice_node(state: AgentState):
 def chief_justice_node(state: AgentState):
     opinions = state.get("opinions", [])
     grouped_opinions = _group_opinions_by_dimension(opinions)
+    evidence_map = state.get("evidences", {}) or {}
+    rubric_dimensions = state.get("rubric_dimensions", [])
 
-    criterion_sections: list[str] = []
+    dimension_specs: list[tuple[str, str]] = []
+    for raw_dimension in rubric_dimensions:
+        if isinstance(raw_dimension, dict):
+            dimension_id = _get_dimension_id(raw_dimension)
+            dimension_name = _get_dimension_name(raw_dimension, dimension_id)
+            dimension_specs.append((dimension_id, dimension_name))
+
+    if not dimension_specs:
+        known_dimension_ids = list(grouped_opinions.keys()) or list(evidence_map.keys())
+        if not known_dimension_ids:
+            known_dimension_ids = ["general"]
+        dimension_specs = [(dimension_id, dimension_id) for dimension_id in known_dimension_ids]
+
+    criteria_results: list[CriterionResult] = []
     criterion_scores: list[float] = []
     low_score_findings: list[tuple[str, float, str]] = []
+    dissent_required = False
+    dissent_records: list[str] = []
+
+    def _normalized(text: str) -> str:
+        return (text or "").strip().lower()
+
+    def _criterion_is_security(criterion_id: str) -> bool:
+        cid = _normalized(criterion_id)
+        return "security" in cid or cid == "safe_tool_engineering"
+
+    def _criterion_is_architecture(criterion_id: str) -> bool:
+        cid = _normalized(criterion_id)
+        return "architecture" in cid or "graph" in cid
+
+    def _criterion_matches_evidence_key(criterion_id: str, evidence_key: str) -> bool:
+        cid = _normalized(criterion_id)
+        ek = _normalized(evidence_key)
+        key_matches = bool(cid and (cid in ek or ek in cid))
+        if key_matches:
+            return True
+        if _criterion_is_architecture(criterion_id) and ek in {"langgraph_usage", "swarm_visual"}:
+            return True
+        if _criterion_is_security(criterion_id) and ek in {"security_hardening", "safe_tool_engineering"}:
+            return True
+        return False
+
+    def _extract_confidence(raw_evidence: object) -> float | None:
+        raw_value = raw_evidence.get("confidence") if isinstance(raw_evidence, dict) else getattr(raw_evidence, "confidence", None)
+        if raw_value is None:
+            return None
+        try:
+            confidence = float(raw_value)
+        except Exception:
+            return None
+        return max(0.0, min(1.0, confidence))
+
+    def _repo_confidence_for_criterion(criterion_id: str) -> float | None:
+        matched_confidences: list[float] = []
+
+        for evidence_key, evidence_list in evidence_map.items():
+            if not _criterion_matches_evidence_key(criterion_id, str(evidence_key)):
+                continue
+
+            for evidence in evidence_list or []:
+                confidence = _extract_confidence(evidence)
+                if confidence is not None:
+                    matched_confidences.append(confidence)
+
+        if not matched_confidences:
+            return None
+        return min(matched_confidences)
+
+    def _criterion_lines_and_files(criterion_id: str) -> tuple[list[int], list[str]]:
+        line_numbers: set[int] = set()
+        file_locations: set[str] = set()
+
+        for evidence_key, evidence_list in evidence_map.items():
+            if not _criterion_matches_evidence_key(criterion_id, str(evidence_key)):
+                continue
+
+            for evidence in evidence_list or []:
+                if isinstance(evidence, dict):
+                    source_line = evidence.get("source_line", -1)
+                    location = str(evidence.get("location", "")).strip()
+                else:
+                    source_line = getattr(evidence, "source_line", -1)
+                    location = str(getattr(evidence, "location", "")).strip()
+
+                try:
+                    source_line_int = int(source_line)
+                except Exception:
+                    source_line_int = -1
+
+                if source_line_int > 0:
+                    line_numbers.add(source_line_int)
+                if location:
+                    file_locations.add(location.replace("\\", "/"))
+
+        return sorted(line_numbers), sorted(file_locations)
+
+    def _generate_dissent_summary(record_lines: list[str]) -> str:
+        if not record_lines:
+            return "No dissent summary required."
+
+        prompt = "\n".join(record_lines)
+        try:
+            llm = ChatGroq(
+                model="llama-3.1-8b-instant",
+                temperature=0.1,
+                groq_api_key=os.getenv("GROQ_API_KEY"),
+            )
+            response = llm.invoke(
+                [
+                    SystemMessage(
+                        content=(
+                            "You are a Chief Justice summarizer. Produce a concise dissent summary focusing on "
+                            "score conflicts and evidence certainty gaps."
+                        )
+                    ),
+                    HumanMessage(content=prompt),
+                ]
+            )
+            content = str(getattr(response, "content", "")).strip()
+            if content:
+                return content
+        except Exception:
+            pass
+
+        return "Dissent detected: judge score spread exceeded threshold and requires manual adjudication review."
 
     def _remediation_step(criterion_id: str, prosecutor_argument: str) -> str:
         criterion_key = criterion_id.lower()
@@ -460,19 +605,58 @@ def chief_justice_node(state: AgentState):
             return f"Address `{criterion_id}` gaps noted by Prosecutor: {prosecutor_argument}"
         return f"Create a targeted improvement plan for `{criterion_id}` and rerun the audit after implementing fixes."
 
-    for criterion_id, criterion_opinions in grouped_opinions.items():
+    for criterion_id, dimension_name in dimension_specs:
+        criterion_opinions = grouped_opinions.get(criterion_id, [])
         prosecutor = _find_judge_opinion(criterion_opinions, "Prosecutor")
         defense = _find_judge_opinion(criterion_opinions, "Defense")
         tech_lead = _find_judge_opinion(criterion_opinions, "TechLead")
+        repo_confidence = _repo_confidence_for_criterion(criterion_id)
+        cited_lines, evidence_files = _criterion_lines_and_files(criterion_id)
 
-        available_scores = [
-            opinion.score
-            for opinion in [prosecutor, defense, tech_lead]
-            if opinion is not None
-        ]
-        criterion_score = round(sum(available_scores) / len(available_scores), 2) if available_scores else 0.0
-        if available_scores:
+        weighted_scores: list[float] = []
+        scored_values_for_variance: list[float] = []
+
+        for judge_name, opinion in [("Prosecutor", prosecutor), ("Defense", defense), ("TechLead", tech_lead)]:
+            if opinion is None:
+                continue
+
+            score_value = float(opinion.score)
+            scored_values_for_variance.append(score_value)
+
+            if repo_confidence is not None and repo_confidence < 0.5 and score_value >= 4.0:
+                continue
+
+            if _criterion_is_architecture(criterion_id) and judge_name == "TechLead":
+                weighted_scores.append(score_value * 0.5)
+            elif _criterion_is_architecture(criterion_id):
+                weighted_scores.append(score_value * 0.25)
+            else:
+                weighted_scores.append(score_value)
+
+        criterion_score = round(sum(weighted_scores), 2) if _criterion_is_architecture(criterion_id) else (
+            round(sum(weighted_scores) / len(weighted_scores), 2) if weighted_scores else 0.0
+        )
+
+        if weighted_scores:
             criterion_scores.append(criterion_score)
+
+        if len(scored_values_for_variance) >= 2:
+            score_variance = max(scored_values_for_variance) - min(scored_values_for_variance)
+            if score_variance > 2.5:
+                dissent_required = True
+                dissent_records.append(
+                    " | ".join(
+                        [
+                            f"criterion={criterion_id}",
+                            f"variance={score_variance:.2f}",
+                            f"prosecutor={prosecutor.score if prosecutor else 'NA'}",
+                            f"defense={defense.score if defense else 'NA'}",
+                            f"tech_lead={tech_lead.score if tech_lead else 'NA'}",
+                            f"repo_confidence={repo_confidence if repo_confidence is not None else 'NA'}",
+                        ]
+                    )
+                )
+
         if criterion_score < 4.0:
             low_score_findings.append(
                 (
@@ -482,31 +666,29 @@ def chief_justice_node(state: AgentState):
                 )
             )
 
-        prosecutor_line = (
-            f"- **Prosecutor** — Score: {prosecutor.score}/5 | Argument: {prosecutor.argument}"
-            if prosecutor
-            else "- **Prosecutor** — Not available"
-        )
-        defense_line = (
-            f"- **Defense** — Score: {defense.score}/5 | Argument: {defense.argument}"
-            if defense
-            else "- **Defense** — Not available"
-        )
-        tech_lead_line = (
-            f"- **Tech Lead** — Score: {tech_lead.score}/5 | Argument: {tech_lead.argument}"
-            if tech_lead
-            else "- **Tech Lead** — Not available"
-        )
+        file_fix_instructions: list[str] = []
+        if criterion_score < 4.0:
+            if evidence_files:
+                for file_location in evidence_files[:3]:
+                    file_fix_instructions.append(f"Fix {criterion_id} issues in {file_location}")
+            else:
+                file_fix_instructions.append(f"Fix {criterion_id} issues in relevant source files and supporting docs")
+            file_fix_instructions.append(_remediation_step(criterion_id, prosecutor.argument if prosecutor else ""))
 
-        criterion_sections.append(
-            "\n".join(
-                [
-                    f"## Criterion: {criterion_id}",
-                    f"- Criterion Score: {criterion_score:.2f}/5",
-                    prosecutor_line,
-                    defense_line,
-                    tech_lead_line,
-                ]
+        criteria_results.append(
+            CriterionResult(
+                dimension_id=criterion_id,
+                dimension_name=dimension_name,
+                final_score=max(1, min(5, int(round(criterion_score if criterion_score > 0 else 1.0)))),
+                judge_opinions=[op for op in [prosecutor, defense, tech_lead] if op is not None],
+                dissent_summary=(
+                    _build_dissent_summary(prosecutor, defense, tech_lead)
+                    if prosecutor and defense and tech_lead and (max(prosecutor.score, defense.score, tech_lead.score) - min(prosecutor.score, defense.score, tech_lead.score) > 2.5)
+                    else None
+                ),
+                remediation=_remediation_step(criterion_id, prosecutor.argument if prosecutor else ""),
+                cited_line_numbers=cited_lines,
+                file_fix_instructions=file_fix_instructions,
             )
         )
 
@@ -523,8 +705,20 @@ def chief_justice_node(state: AgentState):
             f"({found_count}/{total_count} findings marked as found)."
         )
 
+    security_triggered = False
+    for criterion_id, criterion_opinions in grouped_opinions.items():
+        if not _criterion_is_security(criterion_id):
+            continue
+        prosecutor = _find_judge_opinion(criterion_opinions, "Prosecutor")
+        if prosecutor and float(prosecutor.score) < 2.0:
+            security_triggered = True
+            break
+
+    if security_triggered:
+        score_float = min(score_float, 3.0)
+
     overall_score = f"{score_float:.1f}"
-    verdict_string = "PASS" if score_float >= 3.5 else "FAIL"
+    verdict_string = "DISSENT_DETECTED" if dissent_required else ("PASS" if score_float >= 3.5 else "FAIL")
 
     remediation_lines = []
     if low_score_findings:
@@ -535,22 +729,23 @@ def chief_justice_node(state: AgentState):
     else:
         remediation_lines.append("- No critical remediation needed. Maintain current quality and continue monitoring.")
 
-    full_report_content = "\n\n".join(
-        [
-            "# Audit Report",
-            f"- **Overall Score:** {overall_score}/5",
-            f"- **Final Verdict:** {verdict_string}",
-            "",
-            "## Executive Summary",
-            executive_summary,
-            "",
-            "## Criterion Breakdown",
-            "\n\n".join(criterion_sections) if criterion_sections else "No criterion opinions available.",
-            "",
-            "## Remediation Plan",
-            "\n".join(remediation_lines),
-        ]
+    dissent_summary_text = _generate_dissent_summary(dissent_records) if dissent_required else "No dissent detected."
+
+    executive_summary = (
+        f"Verdict: {verdict_string}. Overall Score: {overall_score}/5. "
+        f"{executive_summary}"
     )
+
+    report = AuditReport(
+        repo_url=state.get("repo_url", "Unknown repository"),
+        executive_summary=executive_summary,
+        overall_score=float(overall_score),
+        audit_verdict=verdict_string,
+        criteria=criteria_results,
+        remediation_plan="\n".join(remediation_lines) + f"\n\nDissent Summary: {dissent_summary_text}",
+    )
+
+    full_report_content = _render_report_markdown(report)
 
     out_path = Path("audit") / "report_onself_generated" / "audit_report.md"
     out_path.parent.mkdir(parents=True, exist_ok=True)

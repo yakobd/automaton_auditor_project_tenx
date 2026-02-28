@@ -3,6 +3,7 @@ from src.state import AgentState, Evidence
 from src.nodes.detectives import (
     repo_investigator_node,
     doc_analyst_node,
+    vision_inspector_node,
 )
 from src.nodes.justice import prosecutor_node, defense_node, tech_lead_node, chief_justice_node
 from src.tools.repo_tools import clone_peer_repo
@@ -85,38 +86,6 @@ def investigator_hub_node(state: AgentState):
 
 def repo_detective_node(state: AgentState):
     return repo_investigator_node(state)
-
-
-def vision_inspector_node(state: AgentState):
-    repo_path = state.get("repo_path")
-    if not repo_path:
-        return {
-            "evidences": {
-                "swarm_visual": [
-                    _evidence(
-                        goal="Architectural diagram artifacts are present",
-                        found=False,
-                        content="Vision inspector could not run because repository path is unavailable.",
-                        location="state.repo_path",
-                        rationale="Visual architecture checks require a valid cloned repository path.",
-                    )
-                ]
-            }
-        }
-
-    return {
-        "evidences": {
-            "swarm_visual": [
-                _evidence(
-                    goal="Architectural diagram artifacts are present",
-                    found=True,
-                    content="Vision inspector branch executed as part of detective fan-out.",
-                    location=str(repo_path),
-                    rationale="Branch included for two-stage diamond architecture and visual analysis lane coverage.",
-                )
-            ]
-        }
-    }
 
 
 def evidence_aggregator_node(state: AgentState):
