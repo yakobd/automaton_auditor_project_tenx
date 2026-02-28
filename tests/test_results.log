@@ -1,0 +1,10 @@
+============================= test session starts =============================
+platform win32 -- Python 3.13.9, pytest-8.4.2, pluggy-1.5.0
+rootdir: C:\Users\Yakob\Desktop\10 Academy\Week-2\FDE Challenge Week 2 The Automaton Auditor\automaton_auditor_project_tenx
+configfile: pyproject.toml
+plugins: anyio-4.10.0
+collected 1 item
+
+tests\test_state.py .                                                    [100%]
+
+============================== 1 passed in 0.71s ==============================
