@@ -50,7 +50,7 @@
 #     audit_completed: bool
 
 import operator
-from typing import Annotated, TypedDict, List, Optional, Dict, Literal
+from typing import Annotated, List, Optional, Dict, Literal
 from pydantic import BaseModel, Field
 
 # --- Detective Output [cite: 129-139] ---
@@ -86,15 +86,17 @@ class AuditReport(BaseModel):
     criteria: List[CriterionResult]
     remediation_plan: str
 
-# --- Graph State [cite: 168-180] ---
-class AgentState(TypedDict):
+# Concurrency Control: Using Annotated list with operator.add to ensure thread-safe 'Fan-In' state merges.
+class AgentState(BaseModel):
     repo_url: str
-    repo_path: Optional[str]
-    pdf_path: Optional[str]
-    rubric_dimensions: List[Dict]
-    synthesis_rules: Dict[str, str]
-    # Reducers prevent data overwriting during parallel execution
-    evidences: Annotated[Dict[str, List[Evidence]], operator.ior]
-    opinions: Annotated[List[JudicialOpinion], operator.add]
-    final_report: Optional[AuditReport]
-    audit_completed: bool
+    repo_path: Optional[str] = None
+    pdf_path: Optional[str] = None
+    rubric_dimensions: Annotated[List[Dict], operator.add] = Field(default_factory=list)
+    synthesis_rules: Dict[str, str] = Field(default_factory=dict)
+    evidences: Annotated[Dict[str, List[Evidence]], operator.ior] = Field(default_factory=dict)
+    opinions: Annotated[List[JudicialOpinion], operator.add] = Field(default_factory=list)
+    final_report: Optional[AuditReport] = None
+    audit_completed: bool = False
+
+    def get(self, key: str, default=None):
+        return getattr(self, key, default)
