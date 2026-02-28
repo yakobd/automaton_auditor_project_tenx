@@ -107,7 +107,10 @@ class AgentState(BaseModel):
     synthesis_rules: Dict[str, str] = Field(default_factory=dict)
     evidences: Annotated[Dict[str, List[Evidence]], operator.ior] = Field(default_factory=dict)
     opinions: Annotated[List[JudicialOpinion], operator.add] = Field(default_factory=list)
-    final_report: Optional[AuditReport] = None
+    final_report: Optional[AuditReport | str] = None
+    overall_score: Optional[float] = None
+    audit_verdict: Optional[Literal["PASS", "FAIL"]] = None
+    final_report_path: Optional[str] = None
     audit_completed: bool = False
 
     def get(self, key: str, default=None):

@@ -156,10 +156,13 @@ def prosecutor_node(state: AgentState):
         binding_law = _build_binding_law(state, criterion_id)
 
         system_prompt = (
-            "You are a skeptical senior software auditor acting as a prosecutor. "
+            "You are a strict adversarial prosecutor for software forensics. "
             "Return ONLY a structured JudicialOpinion object with fields: "
             "judge, criterion_id, score (1-5), argument (string), and cited_evidence (list of strings). "
-            "Set judge exactly to 'Prosecutor'. Do not invent facts; cite only provided evidence.\n\n"
+            "Set judge exactly to 'Prosecutor'. "
+            "Be maximally critical of security posture and code quality; prioritize vulnerabilities, brittle design, and reliability regressions. "
+            "Do not provide balancing praise unless evidence shows concrete risk mitigation. "
+            "Do not mirror Defense or TechLead language. Do not invent facts; cite only provided evidence.\n\n"
             f"BINDING LAW:\n{binding_law}"
         )
 
@@ -202,10 +205,12 @@ def defense_node(state: AgentState):
         binding_law = _build_binding_law(state, criterion_id)
 
         system_prompt = (
-            "You are a supportive senior architect acting as defense counsel. "
+            "You are defense counsel for software quality and delivery viability. "
             "Return ONLY a structured JudicialOpinion object with fields: "
             "judge, criterion_id, score (1-5), argument (string), and cited_evidence (list of strings). "
-            "Set judge exactly to 'Defense'. Highlight strengths and practical viability, but stay grounded in evidence.\n\n"
+            "Set judge exactly to 'Defense'. "
+            "Emphasize strengths, mitigations, and practical viability while staying evidence-grounded. "
+            "Do not imitate Prosecutor severity language or TechLead arbitration framing.\n\n"
             f"BINDING LAW:\n{binding_law}"
         )
 
@@ -249,10 +254,11 @@ def tech_lead_node(state: AgentState):
         binding_law = _build_binding_law(state, criterion_id)
 
         system_prompt = (
-            "Persona: Pragmatic Tech Lead. Focus on architectural soundness, code cleanliness, and practical viability. "
+            "Persona: Neutral pragmatic Tech Lead arbitrator. Focus on architectural soundness, code cleanliness, and delivery viability. "
             "Return ONLY a structured JudicialOpinion object with fields: "
             "judge, criterion_id, score (1-5), argument (string), and cited_evidence (list of strings). "
-            "Set judge exactly to 'TechLead'.\n\n"
+            "Set judge exactly to 'TechLead'. "
+            "Act as tie-breaker between Prosecutor and Defense; do not copy either side's rhetoric.\n\n"
             f"BINDING LAW:\n{binding_law}"
         )
 

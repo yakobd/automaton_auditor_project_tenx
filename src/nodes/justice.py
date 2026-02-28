@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from src.state import AgentState, AuditReport, CriterionResult, JudicialOpinion
+from src.nodes.judges import judge_node
 
 
 def _get_dimension_id(raw_dimension: dict) -> str:
@@ -75,6 +79,37 @@ def _security_cap_triggered(state: AgentState, dimension_id: str, prosecutor: Ju
     return False
 
 
+def _fact_supremacy_triggered(state: AgentState, dimension_id: str, prosecutor: JudicialOpinion) -> bool:
+    prosecutor_text = (prosecutor.argument + " " + " ".join(prosecutor.cited_evidence)).strip().lower()
+    prosecutor_asserts_finding = any(word in prosecutor_text for word in ("confirm", "confirmed", "found", "verified", "present"))
+
+    evidence_map = state.get("evidences", {})
+    has_confirmed_security_evidence = False
+    for evidence in evidence_map.get(dimension_id, []):
+        goal = str(getattr(evidence, "goal", ""))
+        content = str(getattr(evidence, "content", "") or "")
+        rationale = str(getattr(evidence, "rationale", ""))
+        found = bool(getattr(evidence, "found", False))
+        if found and _contains_security_signal(f"{goal} {content} {rationale}"):
+            has_confirmed_security_evidence = True
+            break
+
+    return prosecutor_asserts_finding and has_confirmed_security_evidence
+
+
+def _apply_security_override(weighted_score: float, dimension_id: str, prosecutor: JudicialOpinion, fact_supremacy: bool) -> tuple[float, bool]:
+    if not fact_supremacy:
+        return weighted_score, False
+
+    if dimension_id == "safe_tool_engineering" and prosecutor.score <= 2:
+        return min(weighted_score, 2.0), True
+
+    if _contains_security_signal(prosecutor.argument) and prosecutor.score <= 2:
+        return min(weighted_score, 3.0), True
+
+    return weighted_score, False
+
+
 def _compute_weighted_score(prosecutor: JudicialOpinion, defense: JudicialOpinion, tech_lead: JudicialOpinion) -> float:
     return (
         0.20 * prosecutor.score
@@ -127,6 +162,50 @@ def _build_remediation_plan(criteria: list[CriterionResult]) -> str:
     return "\n".join(lines)
 
 
+def _render_report_markdown(report: AuditReport) -> str:
+    lines = [
+        "# Audit Results",
+        "",
+        f"- **Repository:** {report.repo_url}",
+        f"- **Overall Score:** {report.overall_score}/5",
+        "",
+        "## Executive Summary",
+        report.executive_summary,
+        "",
+        "## Criterion Breakdown",
+    ]
+
+    for criterion in report.criteria:
+        lines.extend(
+            [
+                "",
+                f"### {criterion.dimension_name} ({criterion.dimension_id})",
+                "#### Final Score",
+                f"{criterion.final_score}/5",
+                "#### Dissent Summary",
+                criterion.dissent_summary or "No significant dissent detected.",
+                "#### Remediation",
+                criterion.remediation,
+                "#### Judge Opinions",
+            ]
+        )
+        for opinion in criterion.judge_opinions:
+            lines.append(
+                f"  - {opinion.judge}: score={opinion.score}, argument={opinion.argument}"
+            )
+
+    lines.extend(["", "## Remediation Plan", report.remediation_plan, ""])
+    return "\n".join(lines)
+
+
+def _write_final_markdown(report: AuditReport) -> str:
+    file_path = os.path.join("audit", "report_onself_generated", "audit_report.md")
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    with open(file_path, "w", encoding="utf-8") as report_file:
+        report_file.write(_render_report_markdown(report))
+    return file_path
+
+
 def justice_node(state: AgentState):
     opinions = state.get("opinions", [])
     rubric_dimensions = state.get("rubric_dimensions", [])
@@ -167,8 +246,17 @@ def justice_node(state: AgentState):
         weighted_score = _compute_weighted_score(prosecutor, defense, tech_lead)
 
         security_capped = _security_cap_triggered(state, dimension_id, prosecutor)
+        fact_supremacy = _fact_supremacy_triggered(state, dimension_id, prosecutor)
         if security_capped:
             weighted_score = min(weighted_score, 3.0)
+
+        weighted_score, security_override_applied = _apply_security_override(
+            weighted_score,
+            dimension_id,
+            prosecutor,
+            fact_supremacy,
+        )
+        security_capped = security_capped or security_override_applied
 
         score_variance = max(prosecutor.score, defense.score, tech_lead.score) - min(
             prosecutor.score, defense.score, tech_lead.score
@@ -196,6 +284,8 @@ def justice_node(state: AgentState):
     if missing_pairs:
         return {
             "final_report": None,
+            "overall_score": None,
+            "final_report_path": None,
             "audit_completed": False,
         }
 
@@ -212,7 +302,43 @@ def justice_node(state: AgentState):
         remediation_plan=_build_remediation_plan(criteria_results),
     )
 
+    final_report_path = _write_final_markdown(report)
+
     return {
         "final_report": report,
+        "overall_score": overall_score,
+        "final_report_path": final_report_path,
         "audit_completed": True,
+    }
+
+
+def chief_justice_node(state: AgentState):
+    validation_update = judge_node(state)
+    markdown_output = ""
+    score_float = 0.0
+
+    if validation_update.get("audit_completed") is False:
+        markdown_output = ""
+        score_float = 0.0
+    else:
+        merged_state = state.model_copy(update=validation_update)
+        justice_update = justice_node(merged_state)
+        report = justice_update.get("final_report")
+
+        if isinstance(report, AuditReport):
+            markdown_output = _render_report_markdown(report)
+            score_float = float(justice_update.get("overall_score") or report.overall_score or 0.0)
+        else:
+            markdown_output = ""
+            score_float = 0.0
+
+    output_path = Path("audit") / "report_onself_generated" / "audit_report.md"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(markdown_output, encoding="utf-8")
+
+    verdict_string = "PASS" if score_float >= 3.5 else "FAIL"
+    return {
+        "final_report": markdown_output,
+        "overall_score": score_float,
+        "audit_verdict": verdict_string,
     }
