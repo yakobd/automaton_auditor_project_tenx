@@ -1,3 +1,9 @@
+# Technical Metadata
+# Architecture: LangGraph StateGraph with Parallel Fan-In/Fan-Out
+# State Management: Pydantic BaseModel with Annotated Reducers
+# Security: Subprocess Shell=False, Secret Masking, Environment Isolation
+# Testing: Pytest suite for State Transition Validation
+
 import os
 import sys
 import json
