@@ -436,36 +436,131 @@ def justice_node(state: AgentState):
 
 def chief_justice_node(state: AgentState):
     opinions = state.get("opinions", [])
-    score_float = 0.0
+    grouped_opinions = _group_opinions_by_dimension(opinions)
 
-    if opinions:
-        grouped_opinions = _group_opinions_by_dimension(opinions)
-        dimension_scores: list[float] = []
-        for judge_list in grouped_opinions.values():
-            if not judge_list:
-                continue
-            dimension_scores.append(sum(opinion.score for opinion in judge_list) / len(judge_list))
+    criterion_sections: list[str] = []
+    criterion_scores: list[float] = []
+    low_score_findings: list[tuple[str, float, str]] = []
 
-        if dimension_scores:
-            score_float = round(sum(dimension_scores) / len(dimension_scores), 2)
-        else:
-            score_float, _, _ = _compute_evidence_found_score(state)
+    def _remediation_step(criterion_id: str, prosecutor_argument: str) -> str:
+        criterion_key = criterion_id.lower()
+        argument_key = (prosecutor_argument or "").lower()
+
+        if "graph" in criterion_key or "langgraph" in criterion_key:
+            return f"Fix LangGraph documentation and flow clarity for `{criterion_id}` in README.md and architecture notes."
+        if "git" in criterion_key or "commit" in argument_key:
+            return f"Increase commit frequency for `{criterion_id}` with smaller, atomic commits and clearer commit messages."
+        if "state" in criterion_key:
+            return f"Strengthen state update consistency for `{criterion_id}` by enforcing typed keys and deterministic merge rules."
+        if "structured" in criterion_key or "output" in criterion_key:
+            return f"Enforce strict structured output validation for `{criterion_id}` and add schema conformance checks."
+        if "safe_tool" in criterion_key or "security" in criterion_key:
+            return f"Harden `{criterion_id}` by adding explicit security checks and documenting secure tool usage constraints."
+        if prosecutor_argument:
+            return f"Address `{criterion_id}` gaps noted by Prosecutor: {prosecutor_argument}"
+        return f"Create a targeted improvement plan for `{criterion_id}` and rerun the audit after implementing fixes."
+
+    for criterion_id, criterion_opinions in grouped_opinions.items():
+        prosecutor = _find_judge_opinion(criterion_opinions, "Prosecutor")
+        defense = _find_judge_opinion(criterion_opinions, "Defense")
+        tech_lead = _find_judge_opinion(criterion_opinions, "TechLead")
+
+        available_scores = [
+            opinion.score
+            for opinion in [prosecutor, defense, tech_lead]
+            if opinion is not None
+        ]
+        criterion_score = round(sum(available_scores) / len(available_scores), 2) if available_scores else 0.0
+        if available_scores:
+            criterion_scores.append(criterion_score)
+        if criterion_score < 4.0:
+            low_score_findings.append(
+                (
+                    criterion_id,
+                    criterion_score,
+                    prosecutor.argument if prosecutor else "",
+                )
+            )
+
+        prosecutor_line = (
+            f"- **Prosecutor** — Score: {prosecutor.score}/5 | Argument: {prosecutor.argument}"
+            if prosecutor
+            else "- **Prosecutor** — Not available"
+        )
+        defense_line = (
+            f"- **Defense** — Score: {defense.score}/5 | Argument: {defense.argument}"
+            if defense
+            else "- **Defense** — Not available"
+        )
+        tech_lead_line = (
+            f"- **Tech Lead** — Score: {tech_lead.score}/5 | Argument: {tech_lead.argument}"
+            if tech_lead
+            else "- **Tech Lead** — Not available"
+        )
+
+        criterion_sections.append(
+            "\n".join(
+                [
+                    f"## Criterion: {criterion_id}",
+                    f"- Criterion Score: {criterion_score:.2f}/5",
+                    prosecutor_line,
+                    defense_line,
+                    tech_lead_line,
+                ]
+            )
+        )
+
+    if criterion_scores:
+        score_float = round(sum(criterion_scores) / len(criterion_scores), 2)
+        executive_summary = (
+            f"Audit completed across {len(criterion_scores)} criterion areas with an overall score of "
+            f"{score_float:.1f}/5."
+        )
     else:
-        score_float, _, _ = _compute_evidence_found_score(state)
-
-    markdown_output = f"Overall Score: {score_float:.1f}/5"
-
-    output_path = Path("audit") / "report_onself_generated" / "audit_report.md"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(markdown_output, encoding="utf-8")
+        score_float, found_count, total_count = _compute_evidence_found_score(state)
+        executive_summary = (
+            "No judicial opinions were available, so the overall score was derived from collected evidence "
+            f"({found_count}/{total_count} findings marked as found)."
+        )
 
     overall_score = f"{score_float:.1f}"
     verdict_string = "PASS" if score_float >= 3.5 else "FAIL"
+
+    remediation_lines = []
+    if low_score_findings:
+        for criterion_id, criterion_score, prosecutor_argument in low_score_findings:
+            remediation_lines.append(
+                f"- {criterion_id} ({criterion_score:.2f}/5): {_remediation_step(criterion_id, prosecutor_argument)}"
+            )
+    else:
+        remediation_lines.append("- No critical remediation needed. Maintain current quality and continue monitoring.")
+
+    full_report_content = "\n\n".join(
+        [
+            "# Audit Report",
+            f"- **Overall Score:** {overall_score}/5",
+            f"- **Final Verdict:** {verdict_string}",
+            "",
+            "## Executive Summary",
+            executive_summary,
+            "",
+            "## Criterion Breakdown",
+            "\n\n".join(criterion_sections) if criterion_sections else "No criterion opinions available.",
+            "",
+            "## Remediation Plan",
+            "\n".join(remediation_lines),
+        ]
+    )
+
+    out_path = Path("audit") / "report_onself_generated" / "audit_report.md"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(full_report_content, encoding="utf-8")
+
     print(f"Final Score Calculated: {overall_score}")
     return {
-        "final_report": markdown_output,
+        "final_report": full_report_content,
         "overall_score": overall_score,
         "audit_verdict": verdict_string,
-        "final_report_path": output_path.as_posix(),
+        "final_report_path": out_path.as_posix(),
         "audit_completed": True,
     }
