@@ -45,25 +45,15 @@ src/
     ├── repo_tools.py # AST verification, Git history, and sandboxed cloning
     └── doc_tools.py  # PDF/Docling analysis and keyword extraction
 
-## 💎 Architecture & Orchestration
-The workflow uses an advanced Conditional Diamond Fan-out/Fan-in pattern:
+## Technical Architecture
 
-Preparation: clone_repo prepares a local sandbox.
+### Technical Indicators
 
-Conditional Routing:
-
-Success Path: If cloning succeeds, the graph triggers a parallel fan-out to repo_investigator and doc_analyst.
-
-Failure/Skip Path: If the repo is inaccessible or missing metadata, the graph uses a conditional edge to skip detectives and route directly to the judge.
-
-Aggregation (Fan-in): Findings from parallel branches are normalized and merged into the judge node for final verdict.
-
-Forensic Rigor
-Typed State: Evidence is a Pydantic model with validated severity and rationale.
-
-Reducers: AgentState uses Annotated[list, operator.add] to ensure evidence from concurrent detectives is accumulated deterministically.
-
-Sandboxing: Repository tools use subprocess with timeouts and error-handling to ensure the host environment remains secure.
+- Orchestration: Parallel Graph Execution using langgraph.graph.StateGraph.
+- State Rigor: Type-safe AgentState via pydantic.BaseModel with operator.add reducers.
+- Dialectical Synthesis: Multi-agent judicial debate (Prosecutor, Defense, Tech Lead) for score normalization.
+- Metacognition: Chief Justice node for conflict resolution and synthesis transparency.
+- Security Hardening: subprocess sandboxing with shell=False and .env template masking.
 
 🛠️ Infrastructure & Troubleshooting (Add to README)
 🛡️ Dependency Pinning & Reproducibility
