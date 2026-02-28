@@ -10,6 +10,16 @@ Automaton Auditor is a LangGraph-based forensic workflow that audits peer reposi
 - Final criterion scores are synthesized using a Weighted Average across Prosecutor, Defense, and Tech Lead judicial opinions.
 - Forensic evidence is collected through AST Analysis of repository source code and RAG-lite Retrieval over repository documentation.
 
+## 🔍 Technical Indicators for Forensic Audit
+
+| Criterion             | Implementation Detail                                                                                                     |
+| :-------------------- | :------------------------------------------------------------------------------------------------------------------------ |
+| Graph Orchestration   | Implemented via langgraph.graph.StateGraph using a parallel Fan-In/Fan-Out architecture.                                  |
+| State Rigor           | Utilizes pydantic.BaseModel for schema enforcement and Annotated lists with operator.add for thread-safe state reduction. |
+| Judicial Dialectics   | Employs a multi-agent debate swarm (Prosecutor, Defense, Tech Lead) to minimize LLM hallucination and bias.               |
+| Safe Tool Engineering | Enforces subprocess.run(shell=False) and strict environment variable masking via .env.example.                            |
+| Metacognition         | The Chief Justice node performs high-level synthesis and conflict resolution across dissenting agent opinions.            |
+
 ---
 
 ## 🚀 Quick Start & Operations
