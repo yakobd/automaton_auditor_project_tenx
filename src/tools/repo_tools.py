@@ -24,18 +24,19 @@ def clone_peer_repo(repo_url: str) -> str:
     
     try:
         # Use subprocess for explicit return-code handling and security
-        result = subprocess.run(
+        subprocess.run(
             ["git", "clone", "--depth", "1", repo_url.strip(), temp_dir],
             capture_output=True,
             text=True,
-            timeout=30  # Explicit safety timeout
+            timeout=30,  # Explicit safety timeout
+            shell=False,
+            check=True,
         )
-        
-        if result.returncode != 0:
-            shutil.rmtree(temp_dir) # Clean up on failure
-            return f"Error: Git clone failed. {result.stderr.strip()}"
-            
+
         return temp_dir
+    except subprocess.CalledProcessError as exc:
+        shutil.rmtree(temp_dir)
+        return f"Error: Git clone failed. {(exc.stderr or '').strip() or str(exc)}"
     except subprocess.TimeoutExpired:
         shutil.rmtree(temp_dir)
         return "Error: Git clone timed out after 30 seconds."

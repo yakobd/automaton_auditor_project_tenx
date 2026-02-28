@@ -118,14 +118,14 @@ def extract_git_history(path: str) -> tuple[list[str], str]:
             capture_output=True,
             text=True,
             timeout=20,
-            check=False,
+            shell=False,
+            check=True,
         )
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        return [], f"Git log extraction failed: {stderr or str(exc)}"
     except Exception as exc:
         return [], f"Git log extraction failed: {exc}"
-
-    if result.returncode != 0:
-        stderr = (result.stderr or "").strip()
-        return [], f"Git log extraction failed: {stderr or 'unknown git error'}"
 
     lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
     if not lines:
