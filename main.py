@@ -60,17 +60,7 @@ def _extract_github_username(repo_url: str) -> str:
     return safe_username or "unknown_user"
 
 
-def _print_evidence_status(goal: str, found: bool) -> None:
-    status = "✅ FOUND" if found else "❌ NOT FOUND"
-    try:
-        print(f"  {status} {goal}")
-    except UnicodeEncodeError:
-        fallback_status = "[PASS] FOUND" if found else "[FAIL] NOT FOUND"
-        print(f"  {fallback_status} {goal}")
-
-
 def _save_unique_report(final_report, repo_url: str) -> str | None:
-    os.makedirs("audit/report_onself_generated", exist_ok=True)
     os.makedirs("result", exist_ok=True)
 
     if final_report is None:
@@ -84,8 +74,8 @@ def _save_unique_report(final_report, repo_url: str) -> str | None:
     if not isinstance(report_payload, dict) or not report_payload:
         return None
 
-    username = _extract_github_username(repo_url)
-    report_path = os.path.join("audit", "report_onself_generated", f"audit_report_{username}.md")
+    filepath = os.path.join("audit", "report_onself_generated", "audit_report_yakobd.md")
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
 
     executive_summary = str(report_payload.get("executive_summary") or "No executive summary available.")
     overall_score = report_payload.get("overall_score", "N/A")
@@ -148,13 +138,13 @@ def _save_unique_report(final_report, repo_url: str) -> str | None:
     lines.extend(["", "## Remediation Plan", remediation_plan, ""])
     report_content = "\n".join(lines)
 
-    with open(report_path, "w", encoding="utf-8") as report_file:
+    with open(filepath, "w", encoding="utf-8") as report_file:
         report_file.write(report_content)
 
     with open(os.path.join("result", "audit_result.md"), "w", encoding="utf-8") as latest_report_file:
         latest_report_file.write(report_content)
 
-    return report_path
+    return filepath
 
 def run_audit(url: str):
     """Initializes and executes the forensic graph once, streaming progress and capturing results."""
@@ -250,7 +240,12 @@ def run_audit(url: str):
                 found = getattr(ev, "found", False)
                 rationale = getattr(ev, "rationale", "No rationale provided")
                 confidence = getattr(ev, "confidence", 0.0)
-                _print_evidence_status(goal, found)
+                status = "✅ FOUND" if found else "❌ NOT FOUND"
+                try:
+                    print(f"  {status} {goal}")
+                except UnicodeEncodeError:
+                    fallback_status = "[PASS] FOUND" if found else "[FAIL] NOT FOUND"
+                    print(f"  {fallback_status} {goal}")
                 print(f"    Rationale: {rationale}")
                 print(f"    Confidence: {int(float(confidence) * 100)}%\n")
 

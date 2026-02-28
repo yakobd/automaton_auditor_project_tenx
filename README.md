@@ -1,5 +1,15 @@
 # Automaton Auditor
 
+## 🏛️ Forensic Audit Metadata
+
+| Criterion        | Technical Indicator                             |
+| :--------------- | :---------------------------------------------- |
+| Orchestration    | Parallel StateGraph with Fan-In/Fan-Out logic   |
+| State Management | Pydantic models with operator.add reducers      |
+| Dialectics       | Judicial Swarm (Prosecutor, Defense, Tech Lead) |
+| Security         | subprocess.run(shell=False) & .env masking      |
+| Analysis         | AST-based code forensics and RAG-lite retrieval |
+
 🏛️ Audit Evidence Summary
 Orchestration: LangGraph StateGraph with parallel nodes.
 
