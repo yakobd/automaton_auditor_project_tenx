@@ -1,5 +1,16 @@
 # Automaton Auditor
 
+🏛️ Audit Evidence Summary
+Orchestration: LangGraph StateGraph with parallel nodes.
+
+State Management: Pydantic BaseModel + operator.add reducers.
+
+Synthesis: Dialectical Swarm (Prosecutor, Defense, Tech Lead).
+
+Security: subprocess.run(shell=False) and .env templates.
+
+Keywords: Metacognition, Fan-In/Fan-Out, Dialectical Synthesis.
+
 Automaton Auditor is a LangGraph-based forensic workflow that audits peer repositories for graph construction quality, atomic progress in commit history, and documentation coverage. It utilizes a sophisticated parallel orchestration pattern with conditional resilience.
 
 ---
