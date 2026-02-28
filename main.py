@@ -191,6 +191,9 @@ def run_audit(url: str):
         executive_summary = ""
         criteria = []
 
+    if overall_score is None:
+        overall_score = latest_state.get("overall_score")
+
     if overall_score is not None:
         print(f"Overall Score: {overall_score}/5")
         verdict = "PASS" if float(overall_score) >= 3.5 else "FAIL"
