@@ -55,6 +55,7 @@ def _extract_github_username(repo_url: str) -> str:
 
 
 def _save_unique_report(final_report, repo_url: str) -> str | None:
+    os.makedirs("audit/report_onself_generated", exist_ok=True)
     os.makedirs("result", exist_ok=True)
 
     if final_report is None:
@@ -69,7 +70,7 @@ def _save_unique_report(final_report, repo_url: str) -> str | None:
         return None
 
     username = _extract_github_username(repo_url)
-    report_path = os.path.join("result", f"audit_report_{username}.md")
+    report_path = os.path.join("audit", "report_onself_generated", f"audit_report_{username}.md")
 
     executive_summary = str(report_payload.get("executive_summary") or "No executive summary available.")
     overall_score = report_payload.get("overall_score", "N/A")
@@ -240,9 +241,8 @@ def run_audit(url: str):
                 print(f"    Confidence: {int(float(confidence) * 100)}%\n")
 
     if unique_report_path:
-        username = _extract_github_username(url)
         print(
-            f"Reports generated in the result/ folder: audit_report_{username}.md and audit_result.md"
+            "Self-audit report saved to audit/report_onself_generated/ and mirrored to result/audit_result.md"
         )
     else:
         print("--- AUDIT COMPLETE: No unique report file was saved. ---")
