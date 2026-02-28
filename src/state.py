@@ -88,6 +88,18 @@ class AuditReport(BaseModel):
 
 # Concurrency Control: Using Annotated list with operator.add to ensure thread-safe 'Fan-In' state merges.
 class AgentState(BaseModel):
+    """Canonical forensic workflow state contract for LangGraph execution.
+
+    This state is operationally treated as immutable inside graph nodes: nodes read
+    the current snapshot and emit delta updates rather than mutating shared state in
+    place. All state transitions are adjudicated through reducer semantics
+    (for example, ``operator.add`` and ``operator.ior``), which compose node outputs
+    into new state copies during fan-in.
+
+    This functional transition model preserves forensic determinism, maintains
+    referential transparency across node boundaries, and mitigates race conditions
+    during parallel evidence collection and judicial opinion aggregation.
+    """
     repo_url: str
     repo_path: Optional[str] = None
     pdf_path: Optional[str] = None
