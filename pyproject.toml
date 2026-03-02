@@ -16,6 +16,7 @@ dependencies = [
 	"GitPython==3.1.46",
 	"typing-extensions==4.15.0",
 	"python-dotenv==1.2.1",
+	"streamlit>=1.43.0",
 	"docling==2.75.0",
 	"langsmith==0.7.6",
 	"langchain-google-genai>=4.2.1",
