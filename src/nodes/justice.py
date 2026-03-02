@@ -747,7 +747,9 @@ def chief_justice_node(state: AgentState):
 
     full_report_content = _render_report_markdown(report)
 
-    out_path = Path("audit") / "report_onself_generated" / "audit_report.md"
+    raw_repo_owner = str(state.get("repo_owner", "unknown_user") or "unknown_user").strip()
+    safe_repo_owner = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in raw_repo_owner) or "unknown_user"
+    out_path = Path("audit") / "report_onself_generated" / f"{safe_repo_owner}_audit_report.md"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(full_report_content, encoding="utf-8")
 

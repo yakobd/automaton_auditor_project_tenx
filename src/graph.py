@@ -19,11 +19,27 @@ def _evidence(goal: str, found: bool, content: str, location: str, rationale: st
         confidence=confidence,
     )
 
+
+def _extract_repo_owner(repo_url: str) -> str:
+    cleaned = (repo_url or "").strip().rstrip("/")
+    marker = "github.com/"
+    if marker not in cleaned:
+        return "unknown_user"
+
+    tail = cleaned.split(marker, 1)[1]
+    owner = tail.split("/", 1)[0].strip()
+    if not owner:
+        return "unknown_user"
+
+    return "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in owner) or "unknown_user"
+
 # 1. CLONE NODE
 def clone_repo_node(state: AgentState):
     repo_url = state.get("repo_url", "")
+    repo_owner = _extract_repo_owner(repo_url)
     if not repo_url:
         return {
+            "repo_owner": repo_owner,
             "repo_path": "",
             "evidences": {
                 "repository_clone": [
@@ -49,6 +65,7 @@ def clone_repo_node(state: AgentState):
     path = clone_peer_repo(repo_url)
     if not path or (isinstance(path, str) and "Error" in path):
         return {
+            "repo_owner": repo_owner,
             "repo_path": path or "",
             "evidences": {
                 "repository_clone": [
@@ -71,7 +88,7 @@ def clone_repo_node(state: AgentState):
                 ],
             },
         }
-    return {"repo_path": path}
+    return {"repo_owner": repo_owner, "repo_path": path}
 
 def route_after_clone(state: AgentState):
     path = state.get("repo_path")

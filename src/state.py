@@ -105,6 +105,7 @@ class AgentState(BaseModel):
     during parallel evidence collection and judicial opinion aggregation.
     """
     repo_url: str
+    repo_owner: str = "unknown_user"
     repo_path: Optional[str] = None
     pdf_path: Optional[str] = None
     rubric_dimensions: Annotated[List[Dict], operator.add] = Field(default_factory=list)
